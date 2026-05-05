@@ -792,9 +792,9 @@ LIMIT_OUTER_MAX = 100_000
 
 
 def _load_setting(wtype: str) -> Dict[str, Any]:
-    """Load ours/{DATASET}_{wtype}_setting.json (set by main from workload.dataset)."""
+    """Load ours/settings/{DATASET}_{wtype}_setting.json (set by main from workload.dataset)."""
     assert DATASET is not None, "DATASET not set; must be initialized by main() before loading settings"
-    p = os.path.join(os.path.dirname(__file__), f"{DATASET}_{wtype.lower()}_setting.json")
+    p = os.path.join(os.path.dirname(__file__), "settings", f"{DATASET}_{wtype.lower()}_setting.json")
     if os.path.exists(p):
         with open(p) as f:
             return json.load(f)
