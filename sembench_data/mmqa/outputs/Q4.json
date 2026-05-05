@@ -1,0 +1,120 @@
+{
+  "scenario": "mmqa",
+  "query_id": "4",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "operator": "sem-extract (multi-label genre)",
+  "cascade_strategy": "cluster + propagate",
+  "params": {
+    "SIM_THR": 0.76
+  },
+  "data": {
+    "n_movies": 24,
+    "n_gt_pairs": 39,
+    "gt_genres": [
+      "action",
+      "biography",
+      "comedy",
+      "crime",
+      "drama",
+      "heist",
+      "horror",
+      "romance",
+      "satire",
+      "science fiction",
+      "thriller",
+      "war",
+      "western"
+    ]
+  },
+  "dase_partition": {
+    "n_clusters": 21,
+    "n_medoids": 21,
+    "clusters_size_gt1": [
+      {
+        "medoid": "The Interview",
+        "members": [
+          "The Interview",
+          "The Night Before"
+        ]
+      },
+      {
+        "medoid": "Bachelorette",
+        "members": [
+          "Bachelorette",
+          "Save the Date"
+        ]
+      },
+      {
+        "medoid": "Cobweb",
+        "members": [
+          "Cobweb",
+          "Extinction"
+        ]
+      }
+    ]
+  },
+  "baseline": {
+    "method": "verbatim BQ q4.sql AI.GENERATE",
+    "sql": "\n    WITH movie_genres AS (\n      SELECT t.title, AI.GENERATE(\n        prompt => ('Extract all applicable genres for each movie based on their description: ', t.text),\n        connection_id => 'us.connection',\n        endpoint => 'gemini-2.5-flash',\n        output_schema => 'genres ARRAY<STRING>'\n      ).genres AS genres\n      FROM mmqa.lizzy_caplan_text_data t\n      WHERE t.title IN UNNEST(@titles)\n    )\n    SELECT title, genres FROM movie_genres\n",
+    "result_pairs_n": 56,
+    "score": {
+      "f1": 0.6315789473684211,
+      "precision": 0.5357142857142857,
+      "recall": 0.7692307692307693
+    },
+    "latency_breakdown": {
+      "wall_s": 11.200664043426514,
+      "slot_ms": 24435
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 24,
+      "total_cost_usd": 0.002,
+      "_note": "cost from paper per-call rate (no AI.GENERATE calibration)"
+    }
+  },
+  "cascade": {
+    "method": "agglomerative single-link sim\u22650.76; AI.GENERATE on medoids; propagate genre array",
+    "stage_sql": "\n    WITH movie_genres AS (\n      SELECT t.title, AI.GENERATE(\n        prompt => ('Extract all applicable genres for each movie based on their description: ', t.text),\n        connection_id => 'us.connection',\n        endpoint => 'gemini-2.5-flash',\n        output_schema => 'genres ARRAY<STRING>'\n      ).genres AS genres\n      FROM mmqa.lizzy_caplan_text_data t\n      WHERE t.title IN UNNEST(@titles)\n    )\n    SELECT title, genres FROM movie_genres\n",
+    "stage_wall_s": 9.682511329650879,
+    "stage_slot_ms": 33514,
+    "result_pairs_n": 56,
+    "score": {
+      "f1": 0.6105263157894737,
+      "precision": 0.5178571428571429,
+      "recall": 0.7435897435897436
+    },
+    "totals": {
+      "wall_s": 9.682511329650879,
+      "slot_ms_bq_total": 33514,
+      "cost_usd": 0.00175,
+      "n_llm_calls": 21
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.6,
+      "paper_DASE_NN": null,
+      "ours_BQ": 0.6315789473684211,
+      "ours_cascade": 0.6105263157894737
+    },
+    "wall_s": {
+      "paper_BQ": 9.7,
+      "paper_DASE_NN": null,
+      "ours_BQ": 9.7,
+      "ours_cascade": 9.487499999999999
+    },
+    "cost_usd": {
+      "paper_BQ": 0.002,
+      "paper_DASE_NN": null,
+      "ours_BQ": 0.002,
+      "ours_cascade": 0.00175
+    },
+    "n_llm_calls": {
+      "paper_BQ": 24,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 24,
+      "ours_cascade": 21
+    }
+  }
+}

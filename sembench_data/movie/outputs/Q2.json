@@ -1,0 +1,178 @@
+{
+  "scenario": "movie",
+  "query_id": 2,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Determine if the following movie review is clearly positive, review:",
+  "structural_filter": "id = 'taken_3'",
+  "params": {
+    "K_candidates": 10,
+    "target": 5
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "cascade_form": "Option E (staging table; original BQ SQL runs verbatim with movie.reviews \u2192 movie.q2_candidates)",
+  "data": {
+    "n_reviews_total_dedup": 1865,
+    "n_reviews_in_scope": 120,
+    "n_gt_positive_in_scope": 14
+  },
+  "dase_breakdown": {
+    "data_load_dedup_filter_s": 0.04550027847290039,
+    "embed_prompts_s": 1.232651948928833,
+    "margin_compute_s": 0.003226757049560547,
+    "rank_topk_s": 0.0005612373352050781,
+    "total_s": 1.281940221786499
+  },
+  "dase_top_K_reviewIds": [
+    2434911,
+    2240508,
+    2241270,
+    2241826,
+    2241667,
+    2829828,
+    102724022,
+    2301741,
+    2241762,
+    2310947
+  ],
+  "dase_top_K_margins": [
+    0.09559524059295654,
+    0.068276047706604,
+    0.06753206253051758,
+    0.06510627269744873,
+    0.05455124378204346,
+    0.039978623390197754,
+    0.03724563121795654,
+    0.028909623622894287,
+    0.027252912521362305,
+    0.02639639377593994
+  ],
+  "calibration": {
+    "method": "AI.GENERATE_BOOL + thinking_budget=0",
+    "scope": "id='taken_3'",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 463,
+      "prompt_audio": 0,
+      "output": 53,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0002714,
+    "per_row_cost_usd": 2.7139999999999998e-05,
+    "elapsed_s": 2.0717132091522217
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q2.sql verbatim on movie.reviews",
+    "sql": "\n    SELECT reviewId\n    FROM movie.reviews AS r\n    WHERE r.id = 'taken_3' AND AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 5\n",
+    "result_ids": [
+      2241667,
+      2434911,
+      2829828,
+      2321621,
+      2241270
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 2.9547951221466064,
+      "slot_ms": 12866
+    },
+    "cost_breakdown": {
+      "n_llm_calls_est": 5,
+      "n_llm_calls_method": "round(slot_ms / 2500)",
+      "per_row_cost_usd": 2.7139999999999998e-05,
+      "total_cost_usd": 0.0001357
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase margin \u2192 CTAS staging \u2192 original SQL on staging",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE movie.q2_candidates AS\n    SELECT * FROM movie.reviews\n    WHERE reviewId IN (2434911,2240508,2241270,2241826,2241667,2829828,102724022,2301741,2241762,2310947)\n",
+      "latency_breakdown": {
+        "wall_s": 2.107189655303955,
+        "slot_ms": 1633
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT reviewId\n    FROM movie.q2_candidates AS r\n    WHERE r.id = 'taken_3' AND AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 5\n",
+      "result_ids": [
+        2829828,
+        2240508,
+        2241667,
+        2241270,
+        2434911
+      ],
+      "score": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "latency_breakdown": {
+        "wall_s": 2.8449947834014893,
+        "slot_ms": 5951
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 5,
+        "n_llm_calls_method": "min(max(round(slot_ms/2500), |returned|), K_CANDIDATES)",
+        "per_row_cost_usd": 2.7139999999999998e-05,
+        "total_cost_usd": 0.0001357
+      }
+    },
+    "totals": {
+      "wall_s": 6.234124660491943,
+      "wall_breakdown_s": {
+        "dase": 1.281940221786499,
+        "bq_stage1_ctas": 2.107189655303955,
+        "bq_stage2_aiif": 2.8449947834014893
+      },
+      "slot_ms_bq_total": 7584,
+      "cost_usd": 0.0001357,
+      "n_llm_calls": 5
+    }
+  },
+  "comparison": {
+    "score_f1": {
+      "paper": 1.0,
+      "baseline": 1.0,
+      "cascade": 1.0
+    },
+    "wall_s": {
+      "paper": 9.5,
+      "baseline": 2.9547951221466064,
+      "cascade_total": 6.234124660491943,
+      "cascade_bq_stage2": 2.8449947834014893
+    },
+    "slot_ms_bq": {
+      "paper": null,
+      "baseline": 12866,
+      "cascade_total": 7584,
+      "cascade_stage2": 5951
+    },
+    "cost_usd": {
+      "paper": 0.003,
+      "baseline": 0.0001357,
+      "cascade": 0.0001357
+    },
+    "n_llm_calls": {
+      "paper_implied": 111,
+      "baseline_est": 5,
+      "cascade": 5
+    }
+  }
+}

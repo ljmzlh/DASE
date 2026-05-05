@@ -1,0 +1,274 @@
+{
+  "scenario": "ecomm",
+  "query_id": 1,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "positive": [
+      "a Reebok-branded backpack",
+      "a backpack from the Reebok brand",
+      "a Reebok backpack product"
+    ],
+    "negative": [
+      "a non-backpack product such as shoes, clothing, or accessories",
+      "a backpack from a different brand, not Reebok",
+      "a Reebok product that is not a backpack"
+    ]
+  },
+  "cascade_form": "Option E (staging table fashion_product_images.q1_uncertain); cascade_ids = dase_confident_pos_ids \u222a bq_pos_in_uncertain_ids",
+  "data": {
+    "n_products": 500,
+    "n_gt_positive": 7,
+    "gt_ids": [
+      1623,
+      1624,
+      5299,
+      5300,
+      5301,
+      5303,
+      5314
+    ]
+  },
+  "dase_breakdown": {
+    "data_load_s": 0.1860370635986328,
+    "embed_prompts_s": 1.2627615928649902,
+    "margin_compute_s": 0.07318496704101562,
+    "partition_s": 0.011393308639526367,
+    "total_s": 1.533376932144165
+  },
+  "dase_partition": {
+    "n_uncertain": 100,
+    "n_confident_pos": 7,
+    "n_confident_neg": 393,
+    "uncertain_ids": [
+      10037,
+      10110,
+      10579,
+      13112,
+      13690,
+      16198,
+      18217,
+      18219,
+      18437,
+      19004,
+      19531,
+      19909,
+      2048,
+      20788,
+      22346,
+      2240,
+      23874,
+      2479,
+      25047,
+      25252,
+      25381,
+      26053,
+      26426,
+      27046,
+      27952,
+      28047,
+      31283,
+      31550,
+      33631,
+      34035,
+      3442,
+      3479,
+      3786,
+      40015,
+      43242,
+      45718,
+      46337,
+      46411,
+      4800,
+      4805,
+      4811,
+      53667,
+      53679,
+      53911,
+      5709,
+      5821,
+      6506,
+      10092,
+      10102,
+      10490,
+      11719,
+      12799,
+      13705,
+      14953,
+      15754,
+      18041,
+      19197,
+      19412,
+      2045,
+      21508,
+      21873,
+      23165,
+      25094,
+      25297,
+      25886,
+      2606,
+      2607,
+      26649,
+      28011,
+      28209,
+      29007,
+      32937,
+      34106,
+      34601,
+      3470,
+      36563,
+      37407,
+      38759,
+      38993,
+      39521,
+      40035,
+      40142,
+      43342,
+      44225,
+      44871,
+      4616,
+      46410,
+      4724,
+      4817,
+      4859,
+      50957,
+      5257,
+      5273,
+      52751,
+      54188,
+      54805,
+      56380,
+      7935,
+      8402,
+      9082
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL with Q1 prompt + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 2067,
+      "prompt_audio": 0,
+      "output": 50,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0007451,
+    "per_row_cost_usd": 7.450999999999999e-05,
+    "elapsed_s": 6.326237678527832
+  },
+  "baseline": {
+    "method": "sembench bigquery/q1.sql verbatim on STYLES_DETAILS",
+    "sql": "SELECT id\nFROM fashion_product_images.STYLES_DETAILS AS styles_details\nWHERE TRUE\n  AND AI.IF(\n    ('The product is a backpack from Reebok: ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "result_ids": [
+      1623,
+      1624,
+      5299,
+      5300,
+      5301,
+      5303,
+      5314
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 300.7936189174652,
+      "slot_ms": 563214
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 500,
+      "n_llm_calls_method": "scope size (Q1 no LIMIT, all rows)",
+      "per_row_cost_usd": 7.450999999999999e-05,
+      "total_cost_usd": 0.037254999999999996
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase margin \u2192 CTAS uncertain \u2192 original q1.sql on staging; merge dase_confident_pos \u222a bq_pos_in_uncertain",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE fashion_product_images.q1_uncertain AS\n    SELECT * FROM fashion_product_images.STYLES_DETAILS\n    WHERE id IN (10037,10110,10579,13112,13690,16198,18217,18219,18437,19004,19531,19909,2048,20788,22346,2240,23874,2479,25047,25252,25381,26053,26426,27046,27952,28047,31283,31550,33631,34035,3442,3479,3786,40015,43242,45718,46337,46411,4800,4805,4811,53667,53679,53911,5709,5821,6506,10092,10102,10490,11719,12799,13705,14953,15754,18041,19197,19412,2045,21508,21873,23165,25094,25297,25886,2606,2607,26649,28011,28209,29007,32937,34106,34601,3470,36563,37407,38759,38993,39521,40035,40142,43342,44225,44871,4616,46410,4724,4817,4859,50957,5257,5273,52751,54188,54805,56380,7935,8402,9082)\n",
+      "latency_breakdown": {
+        "wall_s": 2.230372667312622,
+        "slot_ms": 2702
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT id\nFROM fashion_product_images.q1_uncertain AS styles_details\nWHERE TRUE\n  AND AI.IF(\n    ('The product is a backpack from Reebok: ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "result_bq_pos_in_uncertain": [],
+      "latency_breakdown": {
+        "wall_s": 2.8608667850494385,
+        "slot_ms": 9455
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 100,
+        "n_llm_calls_method": "n_uncertain (no LIMIT, staging size)",
+        "per_row_cost_usd": 7.450999999999999e-05,
+        "total_cost_usd": 0.007450999999999999
+      }
+    },
+    "cascade_ids": [
+      1623,
+      1624,
+      5299,
+      5300,
+      5301,
+      5303,
+      5314
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "totals": {
+      "wall_s": 6.624616384506226,
+      "wall_breakdown_s": {
+        "dase": 1.533376932144165,
+        "bq_stage1_ctas": 2.230372667312622,
+        "bq_stage2_aiif": 2.8608667850494385
+      },
+      "slot_ms_bq_total": 12157,
+      "cost_usd": 0.007450999999999999,
+      "n_llm_calls": 100
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.59,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0,
+      "_baseline_source": "ours",
+      "paper_DASE_NN": 0.94
+    },
+    "wall_s": {
+      "paper_BQ": 21.2,
+      "ours_BQ": 300.7936189174652,
+      "ours_cascade": 6.624616384506226,
+      "_baseline_source": "ours",
+      "paper_DASE_NN": 0.7
+    },
+    "slot_ms_bq": {
+      "ours_BQ": 563214,
+      "ours_cascade": 12157
+    },
+    "cost_usd": {
+      "paper_BQ": 0.04,
+      "ours_BQ": 0.037254999999999996,
+      "ours_cascade": 0.007450999999999999,
+      "_baseline_source": "ours",
+      "paper_DASE_NN": 5e-06
+    },
+    "n_llm_calls": {
+      "ours_BQ": 500,
+      "ours_cascade": 100,
+      "paper_BQ": 537,
+      "paper_DASE_NN": 0
+    }
+  }
+}

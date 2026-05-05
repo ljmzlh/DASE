@@ -1,0 +1,218 @@
+{
+  "scenario": "movie",
+  "query_id": 7,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "row_prompt": "Determine if the following movie review is clearly positive, review:",
+  "structural_filter": "id = 'ant_man_and_the_wasp_quantumania'",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "cascade_form": "Option D \u2014 pair-predicate decomposition. GT(Q7) = POS x NEG U NEG x POS (Cartesian product on classified sets). Cascade classifies each review (dase confident, BQ on uncertain), then emits the full Cartesian product. Stage 2 SQL is NOT the verbatim sembench Q7.sql \u2014 it is the equivalent sem_filter (Q3-style) on the row-level sentiment predicate",
+  "data": {
+    "n_reviews_total_dedup": 1865,
+    "n_reviews_in_scope": 128,
+    "n_gt_positive_in_scope": 66,
+    "n_gt_negative_in_scope": 62,
+    "n_gt_opposite_pairs_ordered": 8184
+  },
+  "dase_breakdown": {
+    "data_load_dedup_filter_s": 0.045143842697143555,
+    "embed_prompts_s": 1.217439889907837,
+    "margin_compute_s": 0.0037581920623779297,
+    "partition_s": 0.002905607223510742,
+    "total_s": 1.2692475318908691
+  },
+  "dase_partition": {
+    "n_uncertain": 26,
+    "n_confident_pos": 45,
+    "n_confident_neg": 57,
+    "uncertain_reviewIds": [
+      102789858,
+      102780888,
+      102779861,
+      102780299,
+      102780632,
+      102781215,
+      102780956,
+      102780668,
+      102780494,
+      102782426,
+      102780725,
+      102782395,
+      102781954,
+      102779557,
+      102780644,
+      102780041,
+      102783989,
+      102781291,
+      102782018,
+      102780837,
+      102781374,
+      102780989,
+      102782779,
+      102780374,
+      102781005,
+      102781828
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on single-row sentiment prompt + thinking_budget=0",
+    "scope": "id='ant_man_and_the_wasp_quantumania'",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 734,
+      "prompt_audio": 0,
+      "output": 58,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0003652,
+    "per_row_cost_usd": 3.6519999999999996e-05,
+    "elapsed_s": 3.2332141399383545
+  },
+  "baseline": {
+    "_status": "aborted",
+    "_status_note": "Baseline NOT run on our project. Q7 has no LIMIT, requiring AI.IF on the full self-join (~16k ordered pairs) at paper-reported $3.31 / 198.3s. Per project policy, baseline metrics are substituted from paper Table 4(a). Cascade is the actual experiment",
+    "method": "sembench bigquery/Q7.sql verbatim on movie.reviews \u2014 NOT EXECUTED",
+    "sql": "SELECT r1.id, r1.reviewId AS reviewId1, r2.reviewId AS reviewId2 FROM movie.reviews AS r1 JOIN movie.reviews AS r2 ON r1.id = r2.id AND r1.reviewId <> r2.reviewId WHERE r1.id = 'ant_man_and_the_wasp_quantumania' AND AI.IF(('These two movie reviews express opposite sentiments...', r1.reviewText, ', Review 2: ', r2.reviewText), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "score": {
+      "precision": null,
+      "recall": null,
+      "f1": 0.7,
+      "_source": "paper Table 4(a)"
+    },
+    "latency_breakdown": {
+      "wall_s": 198.3,
+      "slot_ms": null,
+      "_source": "paper Table 4(a)"
+    },
+    "cost_breakdown": {
+      "n_llm_calls_est": 90635,
+      "n_llm_calls_method": "paper $3.31 / per_row_cost (single-row calibration; pair cost is ~2.4x \u2014 see Q5/Q6 cal)",
+      "per_row_cost_usd": 3.6519999999999996e-05,
+      "total_cost_usd": 3.31,
+      "_source": "paper Table 4(a) cost"
+    }
+  },
+  "cascade": {
+    "method": "Option D: dase classify confident \u2192 BQ classify uncertain \u2192 Cartesian product final_pos \u00d7 final_neg",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE movie.q7_uncertain_reviews AS\n    SELECT * FROM movie.reviews\n    WHERE reviewId IN (102789858,102780888,102779861,102780299,102780632,102781215,102780956,102780668,102780494,102782426,102780725,102782395,102781954,102779557,102780644,102780041,102783989,102781291,102782018,102780837,102781374,102780989,102782779,102780374,102781005,102781828)\n",
+      "latency_breakdown": {
+        "wall_s": 2.568781852722168,
+        "slot_ms": 3440
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_classify": {
+      "sql": "\n    SELECT reviewId\n    FROM movie.q7_uncertain_reviews\n    WHERE id = 'ant_man_and_the_wasp_quantumania' AND AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n",
+      "result_bq_pos_in_uncertain": [
+        102783989,
+        102781291,
+        102783989,
+        102781291
+      ],
+      "result_bq_neg_in_uncertain": [
+        102789858,
+        102780888,
+        102779861,
+        102780299,
+        102780632,
+        102781215,
+        102780956,
+        102780668,
+        102780494,
+        102782426,
+        102780725,
+        102782395,
+        102781954,
+        102779557,
+        102780644,
+        102780041,
+        102782018,
+        102780837,
+        102781374,
+        102780989,
+        102782779,
+        102780374,
+        102781005,
+        102781828
+      ],
+      "latency_breakdown": {
+        "wall_s": 299.74481201171875,
+        "slot_ms": 310914
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 26,
+        "n_llm_calls_method": "n_uncertain (single-row classifier, no LIMIT)",
+        "per_row_cost_usd": 3.6519999999999996e-05,
+        "total_cost_usd": 0.0009495199999999999
+      }
+    },
+    "final_classification": {
+      "final_pos_count": 47,
+      "final_neg_count": 81,
+      "n_cartesian_pairs": 7614
+    },
+    "score": {
+      "precision": 0.7423167848699763,
+      "recall": 0.6906158357771262,
+      "f1": 0.7155336118496013
+    },
+    "totals": {
+      "wall_s": 303.5828413963318,
+      "wall_breakdown_s": {
+        "dase": 1.2692475318908691,
+        "bq_stage1_ctas": 2.568781852722168,
+        "bq_stage2_classify": 299.74481201171875
+      },
+      "slot_ms_bq_total": 314354,
+      "cost_usd": 0.0009495199999999999,
+      "n_llm_calls": 26
+    }
+  },
+  "comparison": {
+    "score_f1": {
+      "paper": 0.7,
+      "baseline": 0.7,
+      "cascade": 0.7155336118496013,
+      "_baseline_source": "paper (aborted)"
+    },
+    "wall_s": {
+      "paper": 198.3,
+      "baseline": 198.3,
+      "cascade_total": 303.5828413963318,
+      "cascade_bq_stage2": 299.74481201171875,
+      "_baseline_source": "paper (aborted)"
+    },
+    "slot_ms_bq": {
+      "baseline": null,
+      "cascade_total": 314354,
+      "cascade_stage2": 310914
+    },
+    "cost_usd": {
+      "paper": 3.31,
+      "baseline": 3.31,
+      "cascade": 0.0009495199999999999,
+      "_baseline_source": "paper (aborted)"
+    },
+    "n_llm_calls": {
+      "paper_implied_via_per_row": 90635,
+      "baseline_est": 90635,
+      "cascade": 26
+    }
+  }
+}

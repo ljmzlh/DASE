@@ -1,0 +1,151 @@
+{
+  "scenario": "wildlife",
+  "query_id": 8,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "alpha": 0.5
+  },
+  "cascade_form": "4-prompt \u00d7 dual-modality + client-side intersect",
+  "data": {
+    "n_img": 200,
+    "n_aud": 66,
+    "gt_elephant_cities": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi"
+    ],
+    "gt_monkey_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "gt_cities": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi"
+    ]
+  },
+  "dase_partition": {
+    "img_uncertain_union": 130,
+    "aud_uncertain_union": 51,
+    "dase_img_eleph_cities": [],
+    "dase_aud_eleph_cities": [],
+    "dase_img_monk_cities": [],
+    "dase_aud_monk_cities": []
+  },
+  "calibration": {
+    "image_per_row": 0.0005576,
+    "audio_per_row": 0.0001961
+  },
+  "baseline": {
+    "_status": "aborted",
+    "score": {
+      "score": 0.75,
+      "_source": "paper"
+    },
+    "latency_breakdown": {
+      "wall_s": 35.5,
+      "_source": "paper"
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 610,
+      "total_cost_usd": 0.23,
+      "_source": "paper"
+    }
+  },
+  "cascade": {
+    "method": "Option E + 4-prompt + dual-modality + client-side intersect",
+    "stage1_wall_s": 6.111327409744263,
+    "stage1_slot_ms": 13941,
+    "stage2_sqls": [
+      "\n    SELECT DISTINCT City FROM animals_dataset.q8_image_uncertain_mm\n    WHERE AI.IF(('Does this image contain an elephant? ', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+      "\n    SELECT DISTINCT City FROM animals_dataset.q8_audio_uncertain_mm\n    WHERE AI.IF(('Does this audio contain an elephant sound? ', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+      "\n    SELECT DISTINCT City FROM animals_dataset.q8_image_uncertain_mm\n    WHERE AI.IF(('Does this image contain a monkey? ', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+      "\n    SELECT DISTINCT City FROM animals_dataset.q8_audio_uncertain_mm\n    WHERE AI.IF(('Does this audio contain a monkey sound? ', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n"
+    ],
+    "bq_results": {
+      "img_eleph": [],
+      "aud_eleph": [
+        "Eldoret",
+        "Kisumu",
+        "Mombasa",
+        "Nairobi",
+        "Nakuru"
+      ],
+      "img_monk": [
+        "Eldoret",
+        "Kisumu",
+        "Mombasa",
+        "Nairobi",
+        "Nakuru"
+      ],
+      "aud_monk": [
+        "Kisumu",
+        "Mombasa",
+        "Nairobi"
+      ]
+    },
+    "stage2_wall_s": 332.7368359565735,
+    "stage2_slot_ms": 801632,
+    "elephant_cities_combined": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "monkey_cities_combined": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "cascade_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "score": {
+      "f1": 0.7499999999999999
+    },
+    "totals": {
+      "wall_s": 338.84816336631775,
+      "slot_ms_bq_total": 815573,
+      "cost_usd": 0.1649782,
+      "n_llm_calls": 362
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.75,
+      "paper_DASE_NN": 0.0,
+      "ours_BQ": 0.75,
+      "ours_cascade": 0.7499999999999999
+    },
+    "wall_s": {
+      "paper_BQ": 35.5,
+      "paper_DASE_NN": 0.002,
+      "ours_BQ": 35.5,
+      "ours_cascade": 338.84816336631775
+    },
+    "cost_usd": {
+      "paper_BQ": 0.23,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.23,
+      "ours_cascade": 0.1649782
+    },
+    "n_llm_calls": {
+      "paper_BQ": 610,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 610,
+      "ours_cascade": 362
+    }
+  }
+}

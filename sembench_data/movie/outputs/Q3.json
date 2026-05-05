@@ -1,0 +1,176 @@
+{
+  "scenario": "movie",
+  "query_id": 3,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Determine if the following movie review is clearly positive, review:",
+  "structural_filter": "id = 'taken_3'",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "cascade_form": "Option E (staging table movie.q3_uncertain); cascade_count = |dase confident_pos| + BQ_count_on_uncertain",
+  "data": {
+    "n_reviews_total_dedup": 1865,
+    "n_reviews_in_scope": 120,
+    "n_gt_positive_in_scope": 14
+  },
+  "dase_breakdown": {
+    "data_load_dedup_filter_s": 0.0461122989654541,
+    "embed_prompts_s": 1.247100591659546,
+    "margin_compute_s": 0.003605365753173828,
+    "partition_s": 0.0010581016540527344,
+    "total_s": 1.2978763580322266
+  },
+  "dase_partition": {
+    "n_uncertain": 24,
+    "n_confident_total": 96,
+    "n_confident_pos": 10,
+    "n_confident_neg": 86,
+    "uncertain_reviewIds": [
+      2241409,
+      2241639,
+      2241817,
+      2241537,
+      2241553,
+      2241827,
+      2241491,
+      2321621,
+      2241513,
+      2323318,
+      2241669,
+      2606639,
+      2241618,
+      2241670,
+      2241868,
+      2241599,
+      2241675,
+      2241700,
+      2241881,
+      2241399,
+      2241798,
+      2241268,
+      2644654,
+      2241666
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL + thinking_budget=0",
+    "scope": "id='taken_3'",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 463,
+      "prompt_audio": 0,
+      "output": 53,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0002714,
+    "per_row_cost_usd": 2.7139999999999998e-05,
+    "elapsed_s": 2.024188995361328
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q3.sql verbatim on movie.reviews",
+    "sql": "\n    SELECT COUNT(*) AS positive_review_cnt\n    FROM movie.reviews AS r\n    WHERE r.id = 'taken_3' AND AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n",
+    "result_count": 6,
+    "score": {
+      "relative_error": 0.5714285714285714,
+      "score": 0.6363636363636364
+    },
+    "latency_breakdown": {
+      "wall_s": 3.3107852935791016,
+      "slot_ms": 16397
+    },
+    "cost_breakdown": {
+      "n_llm_calls_method": "scope size (Q3 no LIMIT, all rows evaluated)",
+      "per_row_cost_usd": 2.7139999999999998e-05,
+      "total_cost_usd": 0.0032568,
+      "n_llm_calls": 120
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase margin \u2192 CTAS uncertain band \u2192 original SQL on staging; merge dase_confident_pos + bq_uncertain_pos",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE movie.q3_uncertain AS\n    SELECT * FROM movie.reviews\n    WHERE reviewId IN (2241409,2241639,2241817,2241537,2241553,2241827,2241491,2321621,2241513,2323318,2241669,2606639,2241618,2241670,2241868,2241599,2241675,2241700,2241881,2241399,2241798,2241268,2644654,2241666)\n",
+      "latency_breakdown": {
+        "wall_s": 2.166717290878296,
+        "slot_ms": 1861
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT COUNT(*) AS positive_review_cnt\n    FROM movie.q3_uncertain AS r\n    WHERE r.id = 'taken_3' AND AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n",
+      "result_bq_pos_on_uncertain": 1,
+      "latency_breakdown": {
+        "wall_s": 2.782158136367798,
+        "slot_ms": 9306
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 24,
+        "n_llm_calls_method": "n_uncertain (Stage 2 no LIMIT, staging size)",
+        "per_row_cost_usd": 2.7139999999999998e-05,
+        "total_cost_usd": 0.0006513599999999999
+      }
+    },
+    "cascade_count": 11,
+    "cascade_count_breakdown": {
+      "dase_confident_pos": 10,
+      "bq_uncertain_pos": 1
+    },
+    "score": {
+      "relative_error": 0.21428571428571427,
+      "score": 0.823529411764706
+    },
+    "totals": {
+      "wall_s": 6.24675178527832,
+      "wall_breakdown_s": {
+        "dase": 1.2978763580322266,
+        "bq_stage1_ctas": 2.166717290878296,
+        "bq_stage2_aiif": 2.782158136367798
+      },
+      "slot_ms_bq_total": 11167,
+      "cost_usd": 0.0006513599999999999,
+      "n_llm_calls": 24
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper": 0.64,
+      "baseline": 0.6363636363636364,
+      "cascade": 0.823529411764706
+    },
+    "wall_s": {
+      "paper": 11.0,
+      "baseline": 3.3107852935791016,
+      "cascade_total": 6.24675178527832,
+      "cascade_bq_stage2": 2.782158136367798
+    },
+    "slot_ms_bq": {
+      "baseline": 16397,
+      "cascade_total": 11167,
+      "cascade_stage2": 9306
+    },
+    "cost_usd": {
+      "paper": 0.003,
+      "baseline": 0.0032568,
+      "cascade": 0.0006513599999999999
+    },
+    "n_llm_calls": {
+      "paper_implied": 111,
+      "baseline": 120,
+      "cascade": 24
+    }
+  },
+  "_postprocess_note": "baseline/cascade score and cost recomputed: (a) manual rel_err to bypass _aggregation_single numpy.int64 bug; (b) n_llm_calls = scope size for non-LIMIT queries (slot_ms heuristic underestimates because BQ AI.IF orchestration has low slot overhead while LLM compute is offloaded)"
+}

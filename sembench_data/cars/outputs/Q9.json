@@ -1,0 +1,209 @@
+{
+  "scenario": "cars",
+  "query_id": 9,
+  "operator": "F",
+  "scale_factor": 19672,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "You are given an image of a vehicle and an audio recording of car diagnostics. Return true if car is torn according to image and has bad ignition according to audio",
+  "structural_filter": "p.car_id = x.car_id AND p.car_id = a.car_id",
+  "params": {
+    "alpha_image": 0.5,
+    "alpha_audio": 1.0,
+    "_note": "drop-only: image confident_neg dropped; audio fully BQ; do not trust dase POS for AND"
+  },
+  "dase_prompts": {
+    "image_torn": {
+      "positive": [
+        "a torn car",
+        "vehicle with torn or ripped material",
+        "image of a car with tear damage"
+      ],
+      "negative": [
+        "an undamaged car",
+        "a vehicle without tears or rips",
+        "intact car body without damage"
+      ]
+    },
+    "audio_bad_ignition": {
+      "positive": [
+        "audio of a car with bad ignition",
+        "ignition starting problem in a car",
+        "engine fails to ignite"
+      ],
+      "negative": [
+        "audio of normal car ignition",
+        "engine starts normally",
+        "healthy engine startup"
+      ]
+    }
+  },
+  "cascade_form": "Drop-only F: dase image NEG drops pairs (image clearly not torn) \u2192 BQ verbatim AI.IF(image, audio) on remaining; cascade_yes = bq_yes_on_kept",
+  "data": {
+    "n_pairs": 69,
+    "n_gt_cars": 0
+  },
+  "dase_breakdown_s": {
+    "data_load": 0.4761009216308594,
+    "dase_compute": 1.2860181331634521,
+    "total": 1.7621190547943115
+  },
+  "dase_partition": {
+    "image": {
+      "n_confident_pos": 17,
+      "n_confident_neg": 18,
+      "n_uncertain": 34
+    },
+    "kept_for_bq": 51
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL multimodal pair (image, audio, Q9 prompt) + thinking_budget=0",
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 7662,
+      "prompt_audio": 250,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0026111,
+    "per_row_cost_usd": 0.00052222,
+    "elapsed_s": 7.16379976272583
+  },
+  "baseline": {
+    "method": "Q9.sql verbatim",
+    "sql": "SELECT DISTINCT p.car_id\nFROM cars_dataset.car_mm as x, cars_dataset.cars AS p, cars_dataset.audio_mm as a\nWHERE p.car_id = x.car_id AND p.car_id = a.car_id\n  AND AI.IF(\n    ('You are given an image of a vehicle and an audio recording of car diagnostics. Return true if car is torn according to image and has bad ignition according to audio.', x.image, a.image),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash')",
+    "result_ids": [
+      21590,
+      31661,
+      92536,
+      122985,
+      123494,
+      188392,
+      214954,
+      233871,
+      264876,
+      268801,
+      274752,
+      278633,
+      295531,
+      299383
+    ],
+    "score": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0
+    },
+    "latency_breakdown": {
+      "wall_s": 10.133842945098877,
+      "slot_ms": 63983
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 69,
+      "n_llm_calls_method": "scope size (69 pairs)",
+      "per_row_cost_usd": 0.00052222,
+      "total_cost_usd": 0.03603318
+    }
+  },
+  "cascade": {
+    "method": "Drop-only F: image dase NEG drops pairs; BQ AI.IF combined on remaining",
+    "stage1_ctas": {
+      "latency_breakdown": {
+        "wall_s": 0.0,
+        "slot_ms": 0
+      },
+      "cost_usd": 0.0,
+      "_note": "no staging; IN-list passed directly"
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT DISTINCT p.car_id\n    FROM cars_dataset.car_mm AS x, cars_dataset.cars AS p, cars_dataset.audio_mm AS a\n    WHERE p.car_id = x.car_id AND p.car_id = a.car_id\n      AND p.car_id IN UNNEST(@ids)\n      AND AI.IF(\n        ('You are given an image of a vehicle and an audio recording of car diagnostics. Return true if car is torn according to image and has bad ignition according to audio.', x.image, a.image),\n        connection_id => 'us.connection',\n        endpoint => 'gemini-2.5-flash')\n",
+      "result_yes_cars": [
+        21590,
+        31661,
+        64600,
+        92536,
+        123494,
+        188392,
+        233871,
+        264876,
+        268801,
+        274752,
+        275208,
+        278633,
+        295531,
+        299383
+      ],
+      "latency_breakdown": {
+        "wall_s": 5.714170694351196,
+        "slot_ms": 36763
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 51,
+        "per_row_cost_usd": 0.00052222,
+        "total_cost_usd": 0.02663322
+      }
+    },
+    "result_ids": [
+      21590,
+      31661,
+      64600,
+      92536,
+      123494,
+      188392,
+      233871,
+      264876,
+      268801,
+      274752,
+      275208,
+      278633,
+      295531,
+      299383
+    ],
+    "score": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0
+    },
+    "totals": {
+      "wall_s": 7.476289749145508,
+      "wall_breakdown_s": {
+        "dase": 1.7621190547943115,
+        "bq_stage1_ctas": 0.0,
+        "bq_stage2_aiif": 5.714170694351196
+      },
+      "slot_ms_bq_total": 36763,
+      "cost_usd": 0.02663322,
+      "n_llm_calls": 51
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.0,
+      "paper_DASE_NN": 1.0,
+      "ours_BQ": 0.0,
+      "ours_cascade": 0.0,
+      "_baseline_source": "ours"
+    },
+    "wall_s": {
+      "paper_BQ": 13.6,
+      "paper_DASE_NN": 0.7,
+      "ours_BQ": 10.133842945098877,
+      "ours_cascade": 7.476289749145508
+    },
+    "slot_ms_bq": {
+      "ours_BQ": 63983,
+      "ours_cascade": 36763
+    },
+    "cost_usd": {
+      "paper_BQ": 0.03,
+      "paper_DASE_NN": 5e-06,
+      "ours_BQ": 0.03603318,
+      "ours_cascade": 0.02663322
+    },
+    "n_llm_calls": {
+      "paper_BQ": 57,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 69,
+      "ours_cascade": 51
+    }
+  }
+}

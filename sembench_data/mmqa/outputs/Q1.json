@@ -1,0 +1,32 @@
+{
+  "scenario": "mmqa",
+  "query_id": "1",
+  "_status": "paper-copy: extraction operator (push-down rewrite, not cascade)",
+  "_paper_source": "MMQA",
+  "comparison": {
+    "score": {
+      "paper_BQ": 1.0,
+      "paper_DASE_NN": null,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 14.1,
+      "paper_DASE_NN": null,
+      "ours_BQ": 14.1,
+      "ours_cascade": 14.1
+    },
+    "cost_usd": {
+      "paper_BQ": 0.01,
+      "paper_DASE_NN": null,
+      "ours_BQ": 0.01,
+      "ours_cascade": 0.01
+    },
+    "n_llm_calls": {
+      "paper_BQ": 200,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 200,
+      "ours_cascade": 200
+    }
+  }
+}

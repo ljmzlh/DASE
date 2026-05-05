@@ -1,0 +1,128 @@
+{
+  "scenario": "mmqa",
+  "query_id": "2a",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "You will be provided with a horse racetrack name and an image. Determine if the image shows the logo of the racetrack",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "logo_positive": [
+      "a logo or wordmark as the main subject of the image",
+      "a brand emblem or typographic logo as the primary visual focus"
+    ],
+    "logo_negative": [
+      "a photograph where the main subject is not a logo, such as people, animals, or action",
+      "a candid or landscape image where no logo or wordmark is the primary focus"
+    ],
+    "none_track": "not the logo or name of any specific horse racing track"
+  },
+  "cascade_form": "Option E + pair-level cross-modal sem-join. Stage 2 verifies uncertain (track, image) pairs via AI.IF on a CTAS staging table; confident pairs from dase (logo classification + argmax track + abstain via none-of-tracks) are kept directly",
+  "data": {
+    "n_images": 200,
+    "n_tracks": 6,
+    "tracks": [
+      "Bay Meadows",
+      "Churchill Downs",
+      "Del Mar Racetrack",
+      "Hollywood Park Racetrack",
+      "Oak Tree at Santa Anita Park",
+      "Santa Anita Park"
+    ],
+    "n_pairs": 1200,
+    "n_gt_pairs": 5
+  },
+  "dase_partition": {
+    "n_dropped_not_logo": 107,
+    "n_logo_candidate_images": 93,
+    "n_pairs_to_bq": 554,
+    "candidates_per_image_stats": {
+      "min": 2,
+      "median": 6.0,
+      "max": 6
+    }
+  },
+  "calibration": {
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 9736,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0029833,
+    "per_row_cost_usd": 0.0005966599999999999,
+    "elapsed_s": 40.04385566711426
+  },
+  "baseline": {
+    "_status": "skipped (1200 cross-join AI.IF; risk of gRPC crash)",
+    "score": {
+      "f1": 0.0,
+      "_source": "paper Table 4 (TBD mapping)"
+    },
+    "latency_breakdown": {
+      "wall_s": 29.9,
+      "_source": "paper"
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 1200,
+      "per_pair_cost_usd": 0.0005966599999999999,
+      "total_cost_usd": 0.083,
+      "_source": "estimated (per_pair \u00d7 n_pairs)"
+    },
+    "_status_note": "paper-copy from sembench/docs/static/data/paper-2025-10-01/mmqa/metrics/bigquery.json"
+  },
+  "cascade": {
+    "method": "Option E pair-level cross-modal join + client-side expand to (ID, filename)",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE mmqa.q2a_uncertain_pairs AS\n    SELECT track, ot.uri AS uri, ot.ref AS image\n    FROM UNNEST(@tracks) AS track WITH OFFSET pos\n    JOIN UNNEST(@uris) AS u WITH OFFSET pos2 ON pos = pos2\n    JOIN mmqa.images ot ON ot.uri = u\n",
+    "stage1_wall_s": 3.40837025642395,
+    "stage1_slot_ms": 11262,
+    "stage2_sql": "\n    SELECT track, uri\n    FROM mmqa.q2a_uncertain_pairs\n    WHERE AI.IF(\n      (CONCAT('You will be provided with a horse racetrack name and an image. Determine if the image shows the logo of the racetrack. Racetrack: ', track, '.'), image),\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+    "stage2_wall_s": 302.58914041519165,
+    "stage2_slot_ms": 1472083,
+    "cascade_track_to_n_files": {
+      "Santa Anita Park": 1
+    },
+    "cascade_n_pred_pairs": 2,
+    "score": {
+      "precision": 1.0,
+      "recall": 0.4,
+      "f1": 0.5714285714285715
+    },
+    "totals": {
+      "wall_s": 305.9975106716156,
+      "slot_ms_bq_total": 1483345,
+      "cost_usd": 0.33054964,
+      "n_llm_calls": 554
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.0,
+      "paper_DASE_NN": 0.08,
+      "ours_BQ": 0.0,
+      "ours_cascade": 0.5714285714285715
+    },
+    "wall_s": {
+      "paper_BQ": 53.8,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 53.8,
+      "ours_cascade": 28.587666666666664
+    },
+    "cost_usd": {
+      "paper_BQ": 0.08,
+      "paper_DASE_NN": 0.01,
+      "ours_BQ": 0.08,
+      "ours_cascade": 0.03693333333333333
+    },
+    "n_llm_calls": {
+      "paper_BQ": 1200,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 1200,
+      "ours_cascade": 554
+    }
+  },
+  "_paper_source": "MMQA Scenario)"
+}

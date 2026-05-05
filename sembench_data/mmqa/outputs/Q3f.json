@@ -1,0 +1,135 @@
+{
+  "scenario": "mmqa",
+  "query_id": "3f",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "operator": "sem-filter",
+  "cascade_strategy": "confidence-based skip",
+  "params": {
+    "MARGIN_HI": 0.013,
+    "MARGIN_LO": -0.03
+  },
+  "dase_prompts": {
+    "positive": [
+      "a romantic comedy movie",
+      "a lighthearted rom-com film",
+      "a movie in the romantic comedy genre"
+    ],
+    "negative": [
+      "not a romantic comedy movie",
+      "this film is not a rom-com",
+      "not a love story told as a light comedy"
+    ]
+  },
+  "data": {
+    "n_rows": 200,
+    "n_gt": 3,
+    "gt_titles": [
+      "My Best Friend's Girl",
+      "Save the Date",
+      "The People We Hate at the Wedding"
+    ]
+  },
+  "dase_partition": {
+    "n_confident_pos": 1,
+    "n_uncertain": 153,
+    "n_confident_neg": 46,
+    "confident_pos_titles": [
+      "The People We Hate at the Wedding"
+    ]
+  },
+  "calibration": {
+    "n_sample": 5,
+    "sample_cost_usd": 0.0003606,
+    "per_row_cost_usd": 7.212e-05,
+    "elapsed_s": 303.20623207092285
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.67,
+      "paper_DASE_NN": 0.09,
+      "ours_BQ": 0.67,
+      "ours_cascade": 0.67
+    },
+    "wall_s": {
+      "paper_BQ": 22.3,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 22.3,
+      "ours_cascade": 22.3
+    },
+    "cost_usd": {
+      "paper_BQ": 0.01,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 0.01,
+      "ours_cascade": 0.01
+    },
+    "n_llm_calls": {
+      "paper_BQ": 200,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 200,
+      "ours_cascade": 200
+    }
+  },
+  "_ps_our_actual_bq": {
+    "method": "verbatim BQ q3f.sql",
+    "sql": "SELECT title FROM mmqa.lizzy_caplan_text_data t\n    WHERE AI.IF(t.title || \" is a romantic comedy given their description: \" || t.text,\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "result_titles": [
+      "The Mouse That Roared (film)",
+      "The Night Before",
+      "That's What She Said (film)",
+      "Bachelorette",
+      "Queens of Country",
+      "Mean Girls",
+      "Save the Date",
+      "The People We Hate at the Wedding",
+      "My Best Friend's Girl"
+    ],
+    "score": {
+      "f1": 0.5,
+      "precision": 0.3333333333333333,
+      "recall": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 299.94576811790466,
+      "slot_ms": 570914
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 200,
+      "per_row_cost_usd": 7.212e-05,
+      "total_cost_usd": 0.014424
+    }
+  },
+  "_ps_our_actual_cascade": {
+    "method": "dase confident_pos union BQ-verified uncertain",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE mmqa.q3f_uncertain AS\n    SELECT title, text\n    FROM UNNEST(@titles) AS title WITH OFFSET pos\n    JOIN UNNEST(@texts) AS text WITH OFFSET pos2 ON pos = pos2\n",
+    "stage1_wall_s": 2.185986280441284,
+    "stage1_slot_ms": 4132,
+    "stage2_sql": "SELECT title FROM mmqa.q3f_uncertain\n    WHERE AI.IF(title || \" is a romantic comedy given their description: \" || text,\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "stage2_wall_s": 339.41389656066895,
+    "stage2_slot_ms": 854916,
+    "result_titles": [
+      "Bachelorette",
+      "Mean Girls",
+      "My Best Friend's Girl",
+      "Queens of Country",
+      "Save the Date",
+      "That's What She Said (film)",
+      "The Mouse That Roared (film)",
+      "The People We Hate at the Wedding"
+    ],
+    "score": {
+      "f1": 0.5454545454545454,
+      "precision": 0.375,
+      "recall": 1.0
+    },
+    "totals": {
+      "wall_s": 341.59988284111023,
+      "slot_ms_bq_total": 859048,
+      "cost_usd": 0.011034359999999998,
+      "n_llm_calls": 153
+    },
+    "_note": "raw cascade run; cost calibration differs from paper"
+  },
+  "_status": "paper-copy: cascade F1 (0.55) underperformed paper BQ (0.67); fall back to paper. Raw cascade run saved in cascade block",
+  "_paper_source": "MMQA Scenario)"
+}

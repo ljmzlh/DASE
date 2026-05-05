@@ -1,0 +1,252 @@
+{
+  "scenario": "ecomm",
+  "query_id": 2,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "tau_high": 0.1,
+    "tau_low": -0.02
+  },
+  "dase_prompts": {
+    "shoes_pos": [
+      "a pair of sports shoes",
+      "athletic sneakers designed for sports",
+      "running or training sports footwear"
+    ],
+    "shoes_neg": [
+      "a product that is not a pair of sports shoes",
+      "a fashion item that is not athletic footwear",
+      "an apparel product that is not sports shoes"
+    ],
+    "yellow_pos": [
+      "a product that has yellow in its color",
+      "a fashion item featuring the color yellow",
+      "a product whose colors include yellow"
+    ],
+    "yellow_neg": [
+      "a product that does not have yellow",
+      "a product without any yellow color",
+      "a product whose colors do not include yellow"
+    ],
+    "silver_pos": [
+      "a product that has silver in its color",
+      "a fashion item featuring the color silver",
+      "a product whose colors include silver"
+    ],
+    "silver_neg": [
+      "a product that does not have silver",
+      "a product without any silver color",
+      "a product whose colors do not include silver"
+    ]
+  },
+  "cascade_form": "Decomposed AND-cascade: 3 sub-filters (shoes / yellow / silver), each with numerical thresholds (TAU_HIGH=0.1, TAU_LOW=-0.02). AND-combine: 3-confident_yes -> cascade YES; any-confident_no -> cascade NO; else -> BQ verifies. Stage 2 is sembench q2.sql verbatim on sub-EXTERNAL-TABLE",
+  "data": {
+    "n_products": 500,
+    "n_gt_positive": 5,
+    "gt_ids": [
+      3312,
+      3462,
+      10037,
+      10102,
+      41825
+    ]
+  },
+  "dase_breakdown": {
+    "data_load_s": 0.13445043563842773,
+    "dase_compute_s": 2.536341428756714,
+    "total_s": 2.6707918643951416
+  },
+  "dase_partition": {
+    "shoes": {
+      "yes": 0,
+      "no": 458,
+      "uncertain": 42
+    },
+    "yellow": {
+      "yes": 0,
+      "no": 12,
+      "uncertain": 488
+    },
+    "silver": {
+      "yes": 0,
+      "no": 2,
+      "uncertain": 498
+    },
+    "AND_cascade_yes": 0,
+    "AND_cascade_no": 458,
+    "AND_uncertain_to_bq": 42,
+    "cascade_yes_ids": [],
+    "uncertain_ids": [
+      34835,
+      12902,
+      17846,
+      10037,
+      44741,
+      5571,
+      23905,
+      5576,
+      15267,
+      26649,
+      10110,
+      1920,
+      3656,
+      7039,
+      7802,
+      10102,
+      25447,
+      3462,
+      15243,
+      13690,
+      3312,
+      4993,
+      3371,
+      43342,
+      8103,
+      19302,
+      34639,
+      8910,
+      10092,
+      7935,
+      28635,
+      4543,
+      5912,
+      36414,
+      14576,
+      25469,
+      43242,
+      26659,
+      6372,
+      6852,
+      6403,
+      41825
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on Q2 image prompt + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 17268,
+      "prompt_audio": 0,
+      "output": 50,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0053054,
+    "per_row_cost_usd": 0.00053054,
+    "elapsed_s": 6.445395231246948
+  },
+  "baseline": {
+    "method": "sembench bigquery/q2.sql verbatim on IMAGES",
+    "sql": "SELECT\n  ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.')) as id\nFROM EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\nWHERE true\n  AND AI.IF(\n    ('The image shows a (pair of) sports shoe(s) that feature the colors yellow and silver.',\n     images.ref),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "result_ids": [
+      3312,
+      3371,
+      3462,
+      10037,
+      10092,
+      10102,
+      13690,
+      41825,
+      43342,
+      53737
+    ],
+    "score": {
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1_score": 0.6666666666666666
+    },
+    "latency_breakdown": {
+      "wall_s": 301.09995579719543,
+      "slot_ms": 541122
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 500,
+      "n_llm_calls_method": "scope size",
+      "per_row_cost_usd": 0.00053054,
+      "total_cost_usd": 0.26527
+    }
+  },
+  "cascade": {
+    "method": "Decomposed AND-cascade: 3 sub-filters with absolute thresholds; AND-aware combine; Stage 1 sub-EXTERNAL-TABLE on uncertain GCS URIs; Stage 2 sembench q2.sql verbatim",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE EXTERNAL TABLE fashion_product_images.q2_uncertain\n    WITH CONNECTION `us.connection`\n    OPTIONS(\n      object_metadata = 'SIMPLE',\n      uris = ['gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/34835.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/12902.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/17846.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/10037.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/44741.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/5571.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/23905.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/5576.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/15267.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/26649.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/10110.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/1920.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/3656.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/7039.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/7802.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/10102.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/25447.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/3462.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/15243.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/13690.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/3312.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/4993.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/3371.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/43342.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/8103.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/19302.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/34639.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/8910.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/10092.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/7935.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/28635.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/4543.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/5912.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/36414.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/14576.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/25469.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/43242.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/26659.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/6372.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/6852.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/6403.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/41825.jpg']\n    )\n",
+      "latency_breakdown": {
+        "wall_s": 1.0269663333892822,
+        "slot_ms": 0
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT\n  ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.')) as id\nFROM EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.q2_uncertain`, ['SIGNED_URL']) as images\nWHERE true\n  AND AI.IF(\n    ('The image shows a (pair of) sports shoe(s) that feature the colors yellow and silver.',\n     images.ref),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "result_bq_pos_in_uncertain": [
+        3312,
+        3462,
+        10037,
+        10092,
+        13690,
+        41825,
+        43342
+      ],
+      "latency_breakdown": {
+        "wall_s": 301.36651253700256,
+        "slot_ms": 677216
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 42,
+        "per_row_cost_usd": 0.00053054,
+        "total_cost_usd": 0.022282680000000003
+      }
+    },
+    "cascade_ids": [
+      3312,
+      3462,
+      10037,
+      10092,
+      13690,
+      41825,
+      43342
+    ],
+    "score": {
+      "precision": 0.5714285714285714,
+      "recall": 0.8,
+      "f1_score": 0.6666666666666666
+    },
+    "totals": {
+      "wall_s": 305.064270734787,
+      "wall_breakdown_s": {
+        "dase": 2.6707918643951416,
+        "bq_stage1_ctas": 1.0269663333892822,
+        "bq_stage2": 301.36651253700256
+      },
+      "slot_ms_bq_total": 677216,
+      "cost_usd": 0.022282680000000003,
+      "n_llm_calls": 42
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.21,
+      "paper_DASE_NN": 0.47,
+      "ours_BQ": 0.6666666666666666,
+      "ours_cascade": 0.6666666666666666
+    },
+    "wall_s": {
+      "paper_BQ": 55.7,
+      "paper_DASE_NN": 0.7,
+      "ours_BQ": 301.09995579719543,
+      "ours_cascade": 305.064270734787
+    },
+    "cost_usd": {
+      "paper_BQ": 3.96,
+      "paper_DASE_NN": 7e-06,
+      "ours_BQ": 0.26527,
+      "ours_cascade": 0.022282680000000003
+    },
+    "n_llm_calls": {
+      "paper_BQ": 7464,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 500,
+      "ours_cascade": 42
+    }
+  }
+}

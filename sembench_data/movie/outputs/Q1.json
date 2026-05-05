@@ -1,0 +1,157 @@
+{
+  "scenario": "movie",
+  "query_id": 1,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Determine if the following movie review is clearly positive, review:",
+  "params": {
+    "K_candidates": 10,
+    "target": 5
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "data": {
+    "n_reviews_total": 2000,
+    "n_reviews_dedup": 1865,
+    "n_gt_positive": 1417
+  },
+  "dase_breakdown_s": {
+    "data_load_dedup": 0.04599618911743164,
+    "embed_prompts": 1.2835257053375244,
+    "margin_compute": 0.0687415599822998,
+    "rank_topk": 0.0007617473602294922,
+    "total": 1.3990252017974854
+  },
+  "dase_top_K_reviewIds": [
+    2596788,
+    102781777,
+    2826804,
+    102698665,
+    2579791,
+    2654012,
+    2668901,
+    2303299,
+    2537857,
+    102669398
+  ],
+  "dase_top_K_margins": [
+    0.1594831943511963,
+    0.1488078236579895,
+    0.14150238037109375,
+    0.14137089252471924,
+    0.14132905006408691,
+    0.14130812883377075,
+    0.1412927508354187,
+    0.14032739400863647,
+    0.1398862600326538,
+    0.13689184188842773
+  ],
+  "calibration": {
+    "method": "AI.GENERATE_BOOL + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 428,
+      "prompt_audio": 0,
+      "output": 50,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0002534,
+    "per_row_cost_usd": 2.5339999999999998e-05,
+    "elapsed_s": 2.233410596847534
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q1.sql (full-table AI.IF + LIMIT 5; BQ server short-circuits)",
+    "sql": "\n    SELECT reviewId\n    FROM movie.reviews AS r\n    WHERE AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 5\n",
+    "result_ids": [
+      2262052,
+      2390940,
+      2403486,
+      2443652,
+      2455782
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "latency_breakdown_s": {
+      "total": 6.304551601409912,
+      "bq_query": 6.304551601409912
+    },
+    "cost_breakdown": {
+      "n_llm_calls_est": 21,
+      "n_llm_calls_method": "round(slot_ms / 2500)",
+      "slot_ms": 52821,
+      "per_row_cost_usd": 2.5339999999999998e-05,
+      "total_cost_usd": 0.00053214
+    }
+  },
+  "cascade": {
+    "method": "dase margin top-K \u2192 single BQ query: AI.IF on IN(K) with LIMIT TARGET (server short-circuits)",
+    "sql": "\n    SELECT reviewId FROM movie.reviews\n    WHERE reviewId IN (2596788,102781777,2826804,102698665,2579791,2654012,2668901,2303299,2537857,102669398)\n      AND AI.IF(\n        ('Determine if the following movie review is clearly positive, review: ', reviewText),\n        connection_id => 'us.connection',\n        endpoint => 'gemini-2.5-flash'\n      )\n    LIMIT 5\n",
+    "result_ids": [
+      102781777,
+      2303299,
+      2537857,
+      2596788,
+      2579791
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "latency_breakdown_s": {
+      "total": 4.839446306228638,
+      "dase": {
+        "data_load_dedup": 0.04599618911743164,
+        "embed_prompts": 1.2835257053375244,
+        "margin_compute": 0.0687415599822998,
+        "rank_topk": 0.0007617473602294922,
+        "total": 1.3990252017974854
+      },
+      "bq_query": 3.4404211044311523
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 5,
+      "n_llm_calls_method": "max(round(slot_ms / 2500), |returned|)",
+      "slot_ms": 12485,
+      "per_row_cost_usd": 2.5339999999999998e-05,
+      "total_cost_usd": 0.0001267
+    }
+  },
+  "comparison": {
+    "score_f1": {
+      "paper": 1.0,
+      "baseline": 1.0,
+      "cascade": 1.0
+    },
+    "latency_s": {
+      "paper": 26.3,
+      "baseline": 6.304551601409912,
+      "cascade_bq": 3.4404211044311523,
+      "cascade_total_with_dase": 4.839446306228638
+    },
+    "cost_usd": {
+      "paper": 0.05,
+      "baseline": 0.00053214,
+      "cascade": 0.0001267
+    },
+    "n_llm_calls": {
+      "paper_implied": 1973,
+      "baseline_est": 21,
+      "cascade": 5
+    }
+  }
+}

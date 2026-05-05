@@ -1,0 +1,235 @@
+{
+  "scenario": "movie",
+  "query_id": 6,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "pair_prompt_prefix": "These two movie reviews express opposite sentiments - one is positive and the other is negative. Review 1:",
+  "pair_prompt_sep": "Review 2:",
+  "structural_filter": "r1.id = 'ant_man_and_the_wasp_quantumania'",
+  "params": {
+    "K_pos": 5,
+    "K_neg": 5,
+    "target_pairs": 10
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "cascade_form": "Option E (staging table movie.q567_candidates shared with Q5/Q7); original sembench Q6.sql runs verbatim with table-name swap. Stage 2 differs from Q5 only in the pair prompt (opposite vs same sentiment)",
+  "data": {
+    "n_reviews_total_dedup": 1865,
+    "n_reviews_in_scope": 128,
+    "n_gt_positive_in_scope": 66,
+    "n_gt_negative_in_scope": 62
+  },
+  "dase_breakdown": {
+    "data_load_dedup_filter_s": 0.04577898979187012,
+    "embed_prompts_s": 1.2640557289123535,
+    "margin_compute_s": 0.0038132667541503906,
+    "rank_topk_s": 0.0005624294281005859,
+    "total_s": 1.3142104148864746
+  },
+  "dase_partition": {
+    "K_pos": 5,
+    "K_neg": 5,
+    "staging_size": 10,
+    "ordered_pairs_in_staging": 90,
+    "pos_reviewIds": [
+      102781777,
+      102780006,
+      102779524,
+      102780625,
+      102779496
+    ],
+    "pos_margins": [
+      0.1488078236579895,
+      0.1341177225112915,
+      0.12177741527557373,
+      0.10882568359375,
+      0.10636425018310547
+    ],
+    "neg_reviewIds": [
+      102781269,
+      102780627,
+      102780917,
+      102779743,
+      102779555
+    ],
+    "neg_margins": [
+      -0.13152945041656494,
+      -0.12183153629302979,
+      -0.11866438388824463,
+      -0.11520588397979736,
+      -0.10601937770843506
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on opposite-sentiment pair prompt + thinking_budget=0",
+    "n_sample_pairs": 5,
+    "tokens_total": {
+      "prompt_other": 817,
+      "prompt_audio": 0,
+      "output": 33,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0003276,
+    "per_pair_cost_usd": 6.552e-05,
+    "elapsed_s": 5.345414400100708
+  },
+  "baseline": {
+    "_status": "aborted",
+    "_status_note": "Baseline NOT run on our project. BQ self-join over the ant_man scope (128 reviews \u2192 16k+ ordered pairs) is consistently slow on our on-demand BQ slot allocation (Q5's attempted run took 301.6s vs paper 54.5s). Per project policy, baseline metrics are substituted from paper Table 4(a). Cascade is the actual experiment",
+    "method": "sembench bigquery/Q6.sql verbatim on movie.reviews \u2014 NOT EXECUTED",
+    "sql": "\n    SELECT r1.id, r1.reviewId AS reviewId1, r2.reviewId AS reviewId2\n    FROM movie.reviews AS r1\n    JOIN movie.reviews AS r2\n    ON r1.id = r2.id AND r1.reviewId <> r2.reviewId\n    WHERE r1.id = 'ant_man_and_the_wasp_quantumania' AND AI.IF(\n      ('These two movie reviews express opposite sentiments - one is positive and the other is negative. Review 1: ', r1.reviewText, ', Review 2: ', r2.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 10\n",
+    "score": {
+      "precision": null,
+      "recall": null,
+      "f1": 0.69,
+      "_source": "paper Table 4(a)"
+    },
+    "latency_breakdown": {
+      "wall_s": 54.5,
+      "slot_ms": null,
+      "_source": "paper Table 4(a)"
+    },
+    "cost_breakdown": {
+      "n_llm_calls_est": 15263,
+      "n_llm_calls_method": "paper $1.00 / per_pair_cost (our calibration)",
+      "per_pair_cost_usd": 6.552e-05,
+      "total_cost_usd": 1.0,
+      "_source": "paper Table 4(a) cost; n_calls back-derived using our per_pair calibration"
+    }
+  },
+  "cascade": {
+    "method": "Option E (shared staging with Q5/Q7): dase top K_pos + K_neg \u2192 CTAS staging \u2192 original Q6 SQL on staging",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE movie.q567_candidates AS\n    SELECT * FROM movie.reviews\n    WHERE reviewId IN (102781777,102780006,102779524,102780625,102779496,102781269,102780627,102780917,102779743,102779555)\n",
+      "latency_breakdown": {
+        "wall_s": 2.329221725463867,
+        "slot_ms": 2742
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT r1.id, r1.reviewId AS reviewId1, r2.reviewId AS reviewId2\n    FROM movie.q567_candidates AS r1\n    JOIN movie.q567_candidates AS r2\n    ON r1.id = r2.id AND r1.reviewId <> r2.reviewId\n    WHERE r1.id = 'ant_man_and_the_wasp_quantumania' AND AI.IF(\n      ('These two movie reviews express opposite sentiments - one is positive and the other is negative. Review 1: ', r1.reviewText, ', Review 2: ', r2.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 10\n",
+      "result_pairs": [
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779555,
+          102780006
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779743,
+          102779496
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779743,
+          102780625
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102780917,
+          102779496
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102780917,
+          102780625
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102781269,
+          102780006
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779496,
+          102780917
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779496,
+          102779555
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779524,
+          102781269
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102780006,
+          102780627
+        ]
+      ],
+      "score": {
+        "precision": 1.0,
+        "recall": 0.9,
+        "f1": 0.9473684210526316
+      },
+      "latency_breakdown": {
+        "wall_s": 3.1457114219665527,
+        "slot_ms": 13750
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 10,
+        "n_llm_calls_method": "min(max(round(slot_ms/2500), |returned|), staging_pairs); BQ short-circuits at LIMIT 10",
+        "per_pair_cost_usd": 6.552e-05,
+        "total_cost_usd": 0.0006552
+      }
+    },
+    "totals": {
+      "wall_s": 6.7891435623168945,
+      "wall_breakdown_s": {
+        "dase": 1.3142104148864746,
+        "bq_stage1_ctas": 2.329221725463867,
+        "bq_stage2_aiif": 3.1457114219665527
+      },
+      "slot_ms_bq_total": 16492,
+      "cost_usd": 0.0006552,
+      "n_llm_calls": 10
+    }
+  },
+  "comparison": {
+    "score_f1": {
+      "paper": 0.69,
+      "baseline": 0.69,
+      "cascade": 0.9473684210526316,
+      "_baseline_source": "paper (aborted)"
+    },
+    "wall_s": {
+      "paper": 54.5,
+      "baseline": 54.5,
+      "cascade_total": 6.7891435623168945,
+      "cascade_bq_stage2": 3.1457114219665527,
+      "_baseline_source": "paper (aborted)"
+    },
+    "slot_ms_bq": {
+      "baseline": null,
+      "cascade_total": 16492,
+      "cascade_stage2": 13750
+    },
+    "cost_usd": {
+      "paper": 1.0,
+      "baseline": 1.0,
+      "cascade": 0.0006552,
+      "_baseline_source": "paper (aborted)"
+    },
+    "n_llm_calls": {
+      "paper_implied": 15263,
+      "baseline_est": 15263,
+      "cascade": 10
+    }
+  }
+}

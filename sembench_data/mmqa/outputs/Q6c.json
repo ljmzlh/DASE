@@ -1,0 +1,140 @@
+{
+  "scenario": "mmqa",
+  "query_id": "6c",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "operator": "sem-filter",
+  "cascade_strategy": "confidence-based skip",
+  "params": {
+    "MARGIN_HI": 0.018,
+    "MARGIN_LO": -0.005
+  },
+  "dase_prompts": {
+    "positive": [
+      "The destination list includes at least one city or airport in Europe",
+      "These destinations mention European cities such as London, Paris, Frankfurt, or Zurich",
+      "The airline flies to a destination located in Europe"
+    ],
+    "negative": [
+      "All listed destinations are outside Europe, for example only North American or Asian cities",
+      "No European country or city appears in this destination text",
+      "The routes described do not include any European airport"
+    ]
+  },
+  "data": {
+    "n_rows": 200,
+    "n_gt": 5,
+    "gt_airlines": [
+      "British Airways",
+      "Delta Air Lines",
+      "Discover Airlines",
+      "Edelweiss Air",
+      "Virgin Atlantic"
+    ]
+  },
+  "dase_partition": {
+    "n_confident_pos": 4,
+    "n_uncertain": 177,
+    "n_confident_neg": 19,
+    "confident_pos_airlines": [
+      "British Airways",
+      "Discover Airlines",
+      "Edelweiss Air",
+      "Virgin Atlantic"
+    ]
+  },
+  "calibration": {
+    "n_sample": 5,
+    "sample_cost_usd": 0.00013969999999999998,
+    "per_row_cost_usd": 2.7939999999999997e-05,
+    "elapsed_s": 4.740100622177124
+  },
+  "cascade": {
+    "method": "dase confident_pos union BQ-verified uncertain",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE mmqa.q6c_uncertain AS\n    SELECT Airlines, Destinations\n    FROM UNNEST(@airlines) AS Airlines WITH OFFSET pos\n    JOIN UNNEST(@dests) AS Destinations WITH OFFSET pos2 ON pos = pos2\n",
+    "stage1_wall_s": 2.0667080879211426,
+    "stage1_slot_ms": 3227,
+    "stage2_sql": "SELECT Airlines FROM mmqa.q6c_uncertain\n    WHERE AI.IF(\"Given destinations '\" || Destinations || \"' of \" || Airlines || \", the airline has flights to Europe.\",\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "stage2_wall_s": 3.6833317279815674,
+    "stage2_slot_ms": 13224,
+    "result_airlines": [
+      "Biman Bangladesh Airlines",
+      "British Airways",
+      "Delta Air Lines",
+      "Discover Airlines",
+      "Edelweiss Air",
+      "Qatar Airways",
+      "Royal Air Maroc",
+      "Saudia",
+      "Tunisair",
+      "Virgin Atlantic"
+    ],
+    "score": {
+      "f1": 0.6666666666666666,
+      "precision": 0.5,
+      "recall": 1.0
+    },
+    "totals": {
+      "wall_s": 5.75003981590271,
+      "slot_ms_bq_total": 16451,
+      "cost_usd": 0.004945379999999999,
+      "n_llm_calls": 177
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.13,
+      "paper_DASE_NN": 0.1,
+      "ours_BQ": 0.6666666666666666,
+      "ours_cascade": 0.6666666666666666
+    },
+    "wall_s": {
+      "paper_BQ": 17.4,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 299.8348226547241,
+      "ours_cascade": 19.149
+    },
+    "cost_usd": {
+      "paper_BQ": 0.004,
+      "paper_DASE_NN": 0.0002,
+      "ours_BQ": 0.004,
+      "ours_cascade": 0.00354
+    },
+    "n_llm_calls": {
+      "paper_BQ": 200,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 200,
+      "ours_cascade": 177
+    }
+  },
+  "_ps_our_actual_bq": {
+    "method": "verbatim BQ q6c.sql",
+    "sql": "SELECT Airlines FROM mmqa.tampa_international_airport\n    WHERE AI.IF(\"Given destinations '\" || Destinations || \"' of \" || Airlines || \", the airline has flights to Europe.\",\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "result_airlines": [
+      "British Airways",
+      "Delta Air Lines",
+      "Discover Airlines",
+      "Edelweiss Air",
+      "Qatar Airways",
+      "Royal Air Maroc",
+      "Saudia",
+      "Tunisair",
+      "Uzbekistan Airways",
+      "Virgin Atlantic"
+    ],
+    "score": {
+      "f1": 0.6666666666666666,
+      "precision": 0.5,
+      "recall": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 299.8348226547241,
+      "slot_ms": 337350
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 200,
+      "per_row_cost_usd": 2.7939999999999997e-05,
+      "total_cost_usd": 0.005587999999999999
+    }
+  }
+}

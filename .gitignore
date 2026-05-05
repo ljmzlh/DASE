@@ -1,0 +1,52 @@
+# Python build / cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.ipynb_checkpoints/
+
+# pgvector build artifacts (pgvector/.gitignore covers most; belt+braces here)
+pgvector/vector.so
+pgvector/src/*.o
+pgvector/src/*.bc
+pgvector/sql/vector--0.8.5.sql
+
+# psql parquets — produced by dump_psql_to_parquet.py or downloaded from HF
+/psql_dump/
+
+# ─── Sembench data files mirrored from HF dataset dasepaper/dase_data ──────
+# These dirs/files are runtime data; setup_data.py downloads them. Keep
+# scripts/, outputs/, *.py, *.md, *.ipynb, queries/ (ecomm), query/ (cars).
+
+# wildlife
+/sembench_data/wildlife/data/
+/sembench_data/wildlife/cache/
+/sembench_data/wildlife/bq_data/
+
+# mmqa
+/sembench_data/mmqa/data/
+/sembench_data/mmqa/cache/
+/sembench_data/mmqa/ground_truth/
+/sembench_data/mmqa/query/
+
+# ecomm
+/sembench_data/ecomm/data/
+/sembench_data/ecomm/cache/
+/sembench_data/ecomm/ground_truth/
+
+# cars
+/sembench_data/cars/data/
+/sembench_data/cars/cache/
+/sembench_data/cars/ground_truth/
+
+# movie
+/sembench_data/movie/data/
+/sembench_data/movie/cache/
+/sembench_data/movie/gt_Q10.csv
+/sembench_data/movie/lotus_Q10.csv
+/sembench_data/movie/lotus_Q9.csv
+/sembench_data/movie/Q3.csv
+
+# Backup of pre-publish git history (do NOT commit)
+.git.bak/

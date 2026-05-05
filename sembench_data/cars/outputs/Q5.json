@@ -1,0 +1,393 @@
+{
+  "scenario": "cars",
+  "query_id": 5,
+  "operator": "F F",
+  "scale_factor": 19672,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": {
+    "audio": "You are given an audio recording of car diagnostics. Return true if the recording captures an audio of a damaged car",
+    "image": "You are given an image of a vehicle or its parts. Return true if car is damaged"
+  },
+  "structural_filter": "p.transmission='Automatic' AND p.car_id=x.car_id AND p.car_id=a.car_id",
+  "params": {
+    "alpha_audio": 1.0,
+    "alpha_image": 0.5,
+    "_note": "alpha_audio=1.0 forces all audio to BQ (dase audio caption signal not reliable enough to drop)"
+  },
+  "dase_prompts": {
+    "audio": {
+      "positive": [
+        "audio recording of a damaged or malfunctioning car",
+        "engine, brake, or mechanical fault sounds",
+        "audio of a car with abnormal mechanical problems"
+      ],
+      "negative": [
+        "audio of a healthy car running normally",
+        "engine sounds with no fault",
+        "normal car operation audio"
+      ]
+    },
+    "image": {
+      "positive": [
+        "an image of a damaged or wrecked car",
+        "a car with dents, scratches, or broken parts",
+        "a vehicle showing signs of accident damage"
+      ],
+      "negative": [
+        "an image of an undamaged intact car",
+        "a clean car in good condition",
+        "a vehicle with no visible damage"
+      ]
+    }
+  },
+  "cascade_form": "Composed F F: two independent F-cascades (audio + image) \u2192 AND merge on car_id \u2192 COUNT scalar",
+  "data": {
+    "n_automatic_cars": 6526,
+    "n_audio_in_scope": 19,
+    "n_image_in_scope": 19,
+    "n_unique_cars_in_scope": 19,
+    "gt_count": 5
+  },
+  "dase_breakdown_s": {
+    "total": 2.2477505207061768,
+    "data_load": 0.4619138240814209,
+    "dase_compute": 1.7858366966247559
+  },
+  "dase_partition": {
+    "audio": {
+      "n_confident_pos_cars": 0,
+      "n_confident_neg": 0,
+      "n_uncertain": 19,
+      "uncertain_meta": [
+        {
+          "i": 0,
+          "car_id": 196817,
+          "margin": 0.024713516235351562
+        },
+        {
+          "i": 1,
+          "car_id": 28166,
+          "margin": 0.008151412010192871
+        },
+        {
+          "i": 2,
+          "car_id": 257395,
+          "margin": 0.006824016571044922
+        },
+        {
+          "i": 3,
+          "car_id": 122985,
+          "margin": 0.001331627368927002
+        },
+        {
+          "i": 4,
+          "car_id": 75389,
+          "margin": -0.022044003009796143
+        },
+        {
+          "i": 5,
+          "car_id": 264876,
+          "margin": -0.00033092498779296875
+        },
+        {
+          "i": 6,
+          "car_id": 289525,
+          "margin": 0.019173800945281982
+        },
+        {
+          "i": 7,
+          "car_id": 163109,
+          "margin": 0.01796203851699829
+        },
+        {
+          "i": 8,
+          "car_id": 118803,
+          "margin": 0.02211630344390869
+        },
+        {
+          "i": 9,
+          "car_id": 50362,
+          "margin": -0.007779061794281006
+        },
+        {
+          "i": 10,
+          "car_id": 21452,
+          "margin": 0.004235982894897461
+        },
+        {
+          "i": 11,
+          "car_id": 98676,
+          "margin": 0.021074771881103516
+        },
+        {
+          "i": 12,
+          "car_id": 275208,
+          "margin": 0.0016783475875854492
+        },
+        {
+          "i": 13,
+          "car_id": 55098,
+          "margin": 0.02406752109527588
+        },
+        {
+          "i": 14,
+          "car_id": 64600,
+          "margin": -0.011641323566436768
+        },
+        {
+          "i": 15,
+          "car_id": 268801,
+          "margin": -0.027027487754821777
+        },
+        {
+          "i": 16,
+          "car_id": 243744,
+          "margin": -0.0055561065673828125
+        },
+        {
+          "i": 17,
+          "car_id": 131511,
+          "margin": 0.03333771228790283
+        },
+        {
+          "i": 18,
+          "car_id": 127228,
+          "margin": 0.009351849555969238
+        }
+      ]
+    },
+    "image": {
+      "n_confident_pos_cars": 3,
+      "n_confident_neg": 6,
+      "n_uncertain": 10,
+      "uncertain_meta": [
+        {
+          "i": 0,
+          "car_id": 28166,
+          "margin": -0.019704818725585938
+        },
+        {
+          "i": 4,
+          "car_id": 131511,
+          "margin": -0.016034245491027832
+        },
+        {
+          "i": 5,
+          "car_id": 163109,
+          "margin": -0.018268942832946777
+        },
+        {
+          "i": 7,
+          "car_id": 196817,
+          "margin": -0.007463693618774414
+        },
+        {
+          "i": 8,
+          "car_id": 264876,
+          "margin": 0.02734428644180298
+        },
+        {
+          "i": 9,
+          "car_id": 55098,
+          "margin": -0.019613444805145264
+        },
+        {
+          "i": 10,
+          "car_id": 75389,
+          "margin": -0.028649210929870605
+        },
+        {
+          "i": 11,
+          "car_id": 50362,
+          "margin": -0.02109360694885254
+        },
+        {
+          "i": 14,
+          "car_id": 64600,
+          "margin": 0.028284907341003418
+        },
+        {
+          "i": 16,
+          "car_id": 118803,
+          "margin": -0.024517536163330078
+        }
+      ]
+    }
+  },
+  "calibration": {
+    "audio": {
+      "method": "AI.GENERATE_BOOL multimodal (audio) + thinking_budget=0",
+      "n_sample": 5,
+      "tokens_total": {
+        "prompt_other": 130,
+        "prompt_audio": 250,
+        "output": 25,
+        "thoughts": 0
+      },
+      "sample_cost_usd": 0.0003515,
+      "per_row_cost_usd": 7.03e-05,
+      "elapsed_s": 8.114970922470093
+    },
+    "image": {
+      "method": "AI.GENERATE_BOOL multimodal (image) + thinking_budget=0",
+      "n_sample": 5,
+      "tokens_total": {
+        "prompt_other": 8624,
+        "prompt_audio": 0,
+        "output": 25,
+        "thoughts": 0
+      },
+      "sample_cost_usd": 0.0026497,
+      "per_row_cost_usd": 0.00052994,
+      "elapsed_s": 5.099322557449341
+    }
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q5.sql verbatim",
+    "sql": "SELECT transmission, COUNT(*) AS count\nFROM (\n  SELECT DISTINCT p.car_id, p.transmission\n  FROM cars_dataset.cars AS p, cars_dataset.audio_mm AS a, cars_dataset.car_mm AS x\n  WHERE p.transmission = \"Automatic\"\n    AND p.car_id = x.car_id AND p.car_id = a.car_id\n    AND AI.IF(\n      ('You are given an audio recording of car diagnostics. Return true if the recording captures an audio of a damaged car.', a.image),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash')\n    AND AI.IF(\n      ('You are given an image of a vehicle or its parts. Return true if car is damaged.', x.image),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash')\n)\nGROUP BY transmission",
+    "result_count": 5,
+    "score": {
+      "relative_error": 0.0,
+      "score": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 640.6953325271606,
+      "slot_ms": 8193735
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 38,
+      "n_llm_calls_method": "n_audio + n_image (both AI.IF per row)",
+      "per_row_cost_usd_audio": 7.03e-05,
+      "per_row_cost_usd_image": 0.00052994,
+      "total_cost_usd": 0.011404560000000001
+    },
+    "_status": "cached_from_prev_profile"
+  },
+  "cascade": {
+    "method": "Composed F F: two F-cascades \u2192 CTAS uncertain (audio + image) \u2192 BQ AI.IF returns yes car_ids per modality; locally union with confident_pos and AND-merge",
+    "stage1_ctas": {
+      "audio": {
+        "sql": "\n    CREATE OR REPLACE TABLE cars_dataset.q5_uncertain_audio_mm AS\n    SELECT m.audio_id, m.car_id, ot.ref AS image\n    FROM cars_dataset.car_audio m\n    JOIN cars_dataset.cars_audios ot ON ot.uri = m.audio_path\n    WHERE m.audio_path IN UNNEST(@uris)\n",
+        "latency_breakdown": {
+          "wall_s": 2.661713123321533,
+          "slot_ms": 4613
+        },
+        "cost_usd": 0.0
+      },
+      "image": {
+        "sql": "\n    CREATE OR REPLACE TABLE cars_dataset.q5_uncertain_car_mm AS\n    SELECT m.image_id, m.car_id, ot.ref AS image\n    FROM cars_dataset.car_images m\n    JOIN cars_dataset.cars_images ot ON ot.uri = m.image_path\n    WHERE m.image_path IN UNNEST(@uris)\n",
+        "latency_breakdown": {
+          "wall_s": 2.3469955921173096,
+          "slot_ms": 9575
+        },
+        "cost_usd": 0.0
+      }
+    },
+    "stage2_run": {
+      "audio": {
+        "sql": "SELECT DISTINCT a.car_id\nFROM cars_dataset.q5_uncertain_audio_mm AS a\nWHERE AI.IF(\n  ('You are given an audio recording of car diagnostics. Return true if the recording captures an audio of a damaged car.', a.image),\n  connection_id => 'us.connection',\n  endpoint => 'gemini-2.5-flash'\n)",
+        "result_yes_cars": [
+          21452,
+          28166,
+          50362,
+          55098,
+          64600,
+          75389,
+          98676,
+          118803,
+          122985,
+          127228,
+          131511,
+          163109,
+          196817,
+          243744,
+          257395,
+          264876,
+          268801,
+          275208,
+          289525
+        ],
+        "latency_breakdown": {
+          "wall_s": 305.8341734409332,
+          "slot_ms": 608141
+        },
+        "cost_breakdown": {
+          "n_llm_calls": 19,
+          "per_row_cost_usd": 7.03e-05,
+          "total_cost_usd": 0.0013357
+        }
+      },
+      "image": {
+        "sql": "SELECT DISTINCT x.car_id\nFROM cars_dataset.q5_uncertain_car_mm AS x\nWHERE AI.IF(\n  ('You are given an image of a vehicle or its parts. Return true if car is damaged.', x.image),\n  connection_id => 'us.connection',\n  endpoint => 'gemini-2.5-flash'\n)",
+        "result_yes_cars": [
+          64600,
+          264876
+        ],
+        "latency_breakdown": {
+          "wall_s": 16.76343321800232,
+          "slot_ms": 38085
+        },
+        "cost_breakdown": {
+          "n_llm_calls": 10,
+          "per_row_cost_usd": 0.00052994,
+          "total_cost_usd": 0.0052994
+        }
+      }
+    },
+    "result_count": 5,
+    "result_cars": [
+      64600,
+      122985,
+      264876,
+      268801,
+      275208
+    ],
+    "score": {
+      "relative_error": 0.0,
+      "score": 1.0
+    },
+    "totals": {
+      "wall_s": 329.85406589508057,
+      "wall_breakdown_s": {
+        "dase": 2.2477505207061768,
+        "bq_stage1_ctas": 5.008708715438843,
+        "bq_stage2_aiif": 322.59760665893555
+      },
+      "slot_ms_bq_total": 660414,
+      "cost_usd": 0.0066351,
+      "n_llm_calls": 29
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 1.0,
+      "paper_DASE_NN": 0.5,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0,
+      "_baseline_source": "ours"
+    },
+    "wall_s": {
+      "paper_BQ": 58.9,
+      "paper_DASE_NN": 1.1,
+      "ours_BQ": 640.6953325271606,
+      "ours_cascade": 329.85406589508057
+    },
+    "slot_ms_bq": {
+      "ours_BQ": 8193735,
+      "ours_cascade": 660414
+    },
+    "cost_usd": {
+      "paper_BQ": 1.47,
+      "paper_DASE_NN": 1e-05,
+      "ours_BQ": 0.011404560000000001,
+      "ours_cascade": 0.0066351
+    },
+    "n_llm_calls": {
+      "paper_BQ": 4898,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 38,
+      "ours_cascade": 29
+    }
+  }
+}

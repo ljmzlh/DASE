@@ -1,0 +1,269 @@
+{
+  "scenario": "ecomm",
+  "query_id": 8,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "desc_len_min": 3000,
+    "tau_low": 0.7
+  },
+  "cascade_form": "Option E (sub-EXTERNAL-TABLE q8_uncertain_images): dase text-emb x image-caption-emb cos sim \u2192 drop sim<=TAU_LOW \u2192 BQ AI.IF on remaining; no tau_high (GT not top-1)",
+  "data": {
+    "n_long_desc_products": 1,
+    "n_images": 500,
+    "n_candidate_pairs": 500,
+    "n_gt_positive_pairs": 1,
+    "long_desc_product_ids": [
+      40270
+    ],
+    "gt_pair_ids": [
+      "40270-40270"
+    ]
+  },
+  "dase_breakdown": {
+    "data_load_s": 0.2300271987915039,
+    "partition_s": 0.0001499652862548828,
+    "total_s": 0.2301771640777588
+  },
+  "dase_partition": {
+    "tau_low": 0.7,
+    "n_uncertain": 123,
+    "n_drop": 377,
+    "gt_preserved": true,
+    "uncertain_image_ids": [
+      53759,
+      34835,
+      46411,
+      9259,
+      36393,
+      58743,
+      10490,
+      20008,
+      41694,
+      2479,
+      36563,
+      2048,
+      46410,
+      4728,
+      40142,
+      30292,
+      22598,
+      54188,
+      56248,
+      24984,
+      13705,
+      5945,
+      5571,
+      26813,
+      14925,
+      41588,
+      2762,
+      22615,
+      2161,
+      23165,
+      4800,
+      3479,
+      13112,
+      51396,
+      53264,
+      26297,
+      9938,
+      14755,
+      17918,
+      27583,
+      1563,
+      19429,
+      28538,
+      14953,
+      15243,
+      3869,
+      39080,
+      26125,
+      52050,
+      14082,
+      4993,
+      16522,
+      10448,
+      19531,
+      18622,
+      15754,
+      19732,
+      19197,
+      9082,
+      16326,
+      31550,
+      9022,
+      26380,
+      25381,
+      34035,
+      2240,
+      53737,
+      7935,
+      11327,
+      9252,
+      12799,
+      4771,
+      11719,
+      2045,
+      23874,
+      6271,
+      46908,
+      34342,
+      4805,
+      29202,
+      19651,
+      43047,
+      6506,
+      10579,
+      20788,
+      4038,
+      3442,
+      40035,
+      8402,
+      4859,
+      37901,
+      14735,
+      5953,
+      49939,
+      4817,
+      17542,
+      13747,
+      31283,
+      38594,
+      40270,
+      52128,
+      44871,
+      26053,
+      53804,
+      38595,
+      44225,
+      4811,
+      19412,
+      22346,
+      2607,
+      8750,
+      21131,
+      19159,
+      14019,
+      3786,
+      16518,
+      2606,
+      31562,
+      19561,
+      9646,
+      33295,
+      43543,
+      5821
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on Q8 image+desc prompt + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 26298,
+      "prompt_audio": 0,
+      "output": 50,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0080144,
+    "per_row_cost_usd": 0.0008014399999999999,
+    "elapsed_s": 8.419860601425171
+  },
+  "baseline": {
+    "method": "sembench bigquery/q8.sql verbatim (model_params stripped)",
+    "sql": "WITH product_selection AS (\n  SELECT *\n  FROM fashion_product_images.STYLES_DETAILS styles_details\n  WHERE true\n    AND CHAR_LENGTH(styles_details.productDescriptors.description.value) >= 3000\n)\nSELECT\n  CONCAT(\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.')),\n    '-',\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.'))\n  ) AS id\nFROM product_selection as styles_details\nJOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\n  ON AI.IF(\n    ('The image ', images.ref, ' fits the description: ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "n_returned": 1,
+    "result_pair_ids": [
+      "40270-40270"
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 300.9563202857971,
+      "slot_ms": 719722
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 500,
+      "n_llm_calls_method": "n_long_desc * n_images (Cartesian)",
+      "per_row_cost_usd": 0.0008014399999999999,
+      "total_cost_usd": 0.40071999999999997
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase 1\u00d7500 cos sim \u2192 drop sim<=tau_low \u2192 Stage1 EXTERNAL TABLE \u2192 Stage2 verbatim AI.IF",
+    "stage1_ctas": {
+      "sql": "CREATE OR REPLACE EXTERNAL TABLE fashion_product_images.q8_uncertain_images\n    WITH CONNECTION `us.connection`\n    OPTIONS(\n      object_metadata = 'SIMPLE',\n      uris = ['gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/53759.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/34835.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/46411.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/9259.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/36393.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/58743.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/10490.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/20008.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/41694.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/2479.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/36563.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/2048.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/46410.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/4728.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/40142.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/30292.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/22598.jpg', 'gs://<YOUR_GCP_PROJECT>-mmb-fashion-product-images-bucket/54188.jpg'",
+      "latency_breakdown": {
+        "wall_s": 0.8161623477935791,
+        "slot_ms": 0
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "WITH product_selection AS (\n  SELECT *\n  FROM fashion_product_images.STYLES_DETAILS styles_details\n  WHERE true\n    AND CHAR_LENGTH(styles_details.productDescriptors.description.value) >= 3000\n)\nSELECT\n  CONCAT(\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.')),\n    '-',\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.'))\n  ) AS id\nFROM product_selection as styles_details\nJOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.q8_uncertain_images`, ['SIGNED_URL']) as images\n  ON AI.IF(\n    ('The image ', images.ref, ' fits the description: ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "n_returned": 1,
+      "result_pair_ids": [
+        "40270-40270"
+      ],
+      "latency_breakdown": {
+        "wall_s": 304.7675988674164,
+        "slot_ms": 371296
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 123,
+        "n_llm_calls_method": "|uncertain images|",
+        "per_row_cost_usd": 0.0008014399999999999,
+        "total_cost_usd": 0.09857711999999999
+      }
+    },
+    "cascade_pair_ids": [
+      "40270-40270"
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "totals": {
+      "wall_s": 305.8139383792877,
+      "wall_breakdown_s": {
+        "dase": 0.2301771640777588,
+        "bq_stage1_ctas": 0.8161623477935791,
+        "bq_stage2_aiif": 304.7675988674164
+      },
+      "slot_ms_bq_total": 371296,
+      "cost_usd": 0.09857711999999999,
+      "n_llm_calls": 123
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.29,
+      "paper_DASE_NN": 0.25,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 126.2,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 300.9563202857971,
+      "ours_cascade": 305.8139383792877
+    },
+    "cost_usd": {
+      "paper_BQ": 18.23,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.40071999999999997,
+      "ours_cascade": 0.09857711999999999
+    },
+    "n_llm_calls": {
+      "paper_BQ": 22747,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 500,
+      "ours_cascade": 123
+    }
+  }
+}

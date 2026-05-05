@@ -1,0 +1,139 @@
+{
+  "scenario": "ecomm",
+  "query_id": 9,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "price_limit": 800,
+    "base_colours": [
+      "Black",
+      "Blue",
+      "Red",
+      "White",
+      "Orange",
+      "Green"
+    ],
+    "tau_high": 0.93,
+    "tau_low": 0.78
+  },
+  "cascade_form": "Option D-style: dase 28\u00d728 image-caption cos sim \u2192 two-threshold pair partition; Stage1 CTAS uncertain (left_id,right_id); Stage2 staging-driver JOIN x product_selection twice (verbatim prefilter), AI.IF prompt verbatim; merge confident_pos \u222a bq_returned",
+  "data": {
+    "n_products_in_scope": 28,
+    "n_candidate_pairs": 756,
+    "n_gt_positive_pairs": 46,
+    "scope_filter": "baseColour IN ['Black', 'Blue', 'Red', 'White', 'Orange', 'Green'], colour1='', colour2='', price<800"
+  },
+  "dase_breakdown": {
+    "data_load_s": 0.14843106269836426,
+    "partition_s": 0.0001239776611328125,
+    "total_s": 0.14855504035949707
+  },
+  "dase_partition": {
+    "n_confident_pos": 10,
+    "n_uncertain": 358,
+    "n_drop": 388,
+    "tau_high": 0.93,
+    "tau_low": 0.78
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on Q9 image-pair prompt + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 6100,
+      "prompt_audio": 0,
+      "output": 50,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0019549999999999997,
+    "per_row_cost_usd": 0.00019549999999999998,
+    "elapsed_s": 26.845585823059082
+  },
+  "baseline": {
+    "method": "sembench bigquery/q9.sql verbatim (model_params stripped)",
+    "sql": "WITH product_selection AS (\n  SELECT images.*\n  FROM fashion_product_images.STYLES_DETAILS styles_details\n  JOIN fashion_product_images.IMAGE_MAPPING mapping\n    ON styles_details.styleImages.default.imageURL = mapping.link\n  JOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\n    ON ARRAY_LAST(SPLIT(images.uri, '/')) = mapping.filename\n  WHERE true\n    AND styles_details.baseColour IN ('Black', 'Blue', 'Red', 'White', 'Orange', 'Green')\n    AND styles_details.colour1 = ''\n    AND styles_details.colour2 = ''\n    AND price < 800\n)\n\nSELECT\n  CONCAT(\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(p1.uri, '/')), '.')),\n    '-',\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(p2.uri, '/')), '.'))\n  ) AS id\nFROM product_selection p1\nLEFT OUTER JOIN product_selection p2\n  ON p1.uri != p2.uri\n  AND AI.IF(\n    ('''\n     Determine whether both images display objects of the same category\n     (e.g., both are shoes, both are bags, etc.) and whether these objects\n     share the same dominant surface color. Disregard any logos, text, or\n     printed graphics on the objects. There might be other objects in the\n     images. Only focus on the main object. Base your comparison solely on\n     object type and overall surface color.''', p1.ref, p2.ref),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "n_returned": 76,
+    "score": {
+      "precision": 0.6052631578947368,
+      "recall": 1.0,
+      "f1_score": 0.7540983606557378
+    },
+    "latency_breakdown": {
+      "wall_s": 303.46132707595825,
+      "slot_ms": 881516
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 756,
+      "n_llm_calls_method": "n_scope * (n_scope - 1) (Cartesian self-join, excl self)",
+      "per_row_cost_usd": 0.00019549999999999998,
+      "total_cost_usd": 0.14779799999999998
+    }
+  },
+  "cascade": {
+    "method": "Option D-style: dase 28\u00d728 image-caption cos \u2192 two-thresh partition \u2192 Stage1 staging pairs \u2192 Stage2 verbatim AI.IF on uncertain",
+    "stage1_ctas": {
+      "sql": "CREATE OR REPLACE TABLE fashion_product_images.q9_uncertain_pairs AS\n    SELECT left_id, right_id FROM UNNEST([STRUCT(14972 AS left_id, 31562 AS right_id),STRUCT(14972 AS left_id, 39039 AS right_id),STRUCT(14972 AS left_id, 25948 AS right_id),STRUCT(1563 AS left_id, 2048 AS right_id),STRUCT(1563 AS left_id, 26125 AS right_id),STRUCT(1563 AS left_id, 28932 AS right_id),STRUCT(1563 AS left_id, 31550 AS right_id),STRUCT(1563 AS left_id, 31562 AS right_id),STRUCT(1563 AS left_id, 34430 AS right_id),STRUCT(1563 AS left_id, 6241 AS right_id),STRUCT(1563 AS left_id, 15779 AS right_id),STRUCT(1563 AS left_id, 15841 AS right_id),STRUCT(1563 AS left_id, 1891 AS right_id),STRUCT(1563 AS left_id, 23165 AS right_id),STRUCT(1563 AS left_id, 2606 AS right_id),STRUCT(1563 AS left_id, 2762 AS right_id),STRUCT(1563 AS left_id, 39129 AS right_id),STRUCT(1563 AS left_id, 47525 AS right_id),STRUCT(1563 AS left_id, 49931 AS right_id),STRUCT(1563 AS left_id, 53126 AS right_id),STRUCT(1563 AS left_id, 53804 AS right_id),STRUCT(2048 AS left_id, 1563 AS right_id),STRUCT(2048 AS left_id, 26125 AS right_id),STRUCT(2048 AS left_id, 28932 AS right_id),STRUCT(2048 AS left_id, 31550 AS right_id),STRUCT(2048 AS left_id, 31562 AS right_id),STRUCT(2048 AS left_id, 34430 AS right_id),STRUCT(2048 AS left_id, 6241 AS right_id),STRUCT(2048 AS left_id, 15779 AS right_id),STRUCT(2048 AS left_id, 15841 AS right_id),STRUCT(2048 AS left_id, 1891 AS right_id),STRUCT(2048 AS left_id, 23165 AS right_id),STRUCT(2048 AS lef",
+      "latency_breakdown": {
+        "wall_s": 2.5891077518463135,
+        "slot_ms": 3416
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "WITH product_selection AS (\n  SELECT images.*\n  FROM fashion_product_images.STYLES_DETAILS styles_details\n  JOIN fashion_product_images.IMAGE_MAPPING mapping\n    ON styles_details.styleImages.default.imageURL = mapping.link\n  JOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\n    ON ARRAY_LAST(SPLIT(images.uri, '/')) = mapping.filename\n  WHERE true\n    AND styles_details.baseColour IN ('Black', 'Blue', 'Red', 'White', 'Orange', 'Green')\n    AND styles_details.colour1 = ''\n    AND styles_details.colour2 = ''\n    AND price < 800\n)\n\nSELECT\n  CONCAT(\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(p1.uri, '/')), '.')),\n    '-',\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(p2.uri, '/')), '.'))\n  ) AS id\nFROM fashion_product_images.q9_uncertain_pairs pairs\nJOIN product_selection p1\n  ON CAST(ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(p1.uri, '/')), '.')) AS INT64) = pairs.left_id\nJOIN product_selection p2\n  ON CAST(ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(p2.uri, '/')), '.')) AS INT64) = pairs.right_id\nWHERE p1.uri != p2.uri\n  AND AI.IF(\n    ('''\n     Determine whether both images display objects of the same category\n     (e.g., both are shoes, both are bags, etc.) and whether these objects\n     share the same dominant surface color. Disregard any logos, text, or\n     printed graphics on the objects. There might be other objects in the\n     images. Only focus on the main object. Base your comparison solely on\n     object type and overall surface color.''', p1.ref, p2.ref),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "n_returned": 54,
+      "latency_breakdown": {
+        "wall_s": 301.9190135002136,
+        "slot_ms": 305245
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 358,
+        "n_llm_calls_method": "|uncertain pairs|",
+        "per_row_cost_usd": 0.00019549999999999998,
+        "total_cost_usd": 0.069989
+      }
+    },
+    "score": {
+      "precision": 0.71875,
+      "recall": 1.0,
+      "f1_score": 0.8363636363636363
+    },
+    "totals": {
+      "wall_s": 304.65667629241943,
+      "wall_breakdown_s": {
+        "dase": 0.14855504035949707,
+        "bq_stage1_ctas": 2.5891077518463135,
+        "bq_stage2_aiif": 301.9190135002136
+      },
+      "slot_ms_bq_total": 308661,
+      "cost_usd": 0.069989,
+      "n_llm_calls": 358
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.58,
+      "paper_DASE_NN": 0.41,
+      "ours_BQ": 0.7540983606557378,
+      "ours_cascade": 0.8363636363636363
+    },
+    "wall_s": {
+      "paper_BQ": 48.6,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 303.46132707595825,
+      "ours_cascade": 304.65667629241943
+    },
+    "cost_usd": {
+      "paper_BQ": 0.21,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.14779799999999998,
+      "ours_cascade": 0.069989
+    },
+    "n_llm_calls": {
+      "paper_BQ": 1074,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 756,
+      "ours_cascade": 358
+    }
+  }
+}

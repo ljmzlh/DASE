@@ -1,0 +1,143 @@
+{
+  "scenario": "wildlife",
+  "query_id": 4,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Does this audio contain an elephant sound?",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "positive": [
+      "a sound recording of an elephant",
+      "audio of an elephant trumpeting or vocalizing",
+      "elephant call sound clip"
+    ],
+    "negative": [
+      "a sound recording of an animal that is not an elephant",
+      "audio of a non-elephant animal vocalization",
+      "animal sound clip without any elephant"
+    ]
+  },
+  "cascade_form": "Option E + client-side argmax over (dase confident pos by city) + (BQ pos by city on uncertain)",
+  "data": {
+    "n_audios": 66,
+    "elephant_count_by_city": {
+      "Kisumu": 2,
+      "Mombasa": 2,
+      "Nairobi": 1
+    },
+    "gt_cities": [
+      "Kisumu",
+      "Mombasa"
+    ]
+  },
+  "dase_partition": {
+    "n_uncertain": 13,
+    "dase_confident_pos_by_city": {}
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL multimodal (audio, prompt) + thinking_budget=0",
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 60,
+      "prompt_audio": 900,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0009805,
+    "per_row_cost_usd": 0.0001961,
+    "elapsed_s": 6.438018083572388
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q4.sql verbatim on audio_data_mm",
+    "sql": "\n    SELECT City AS city\n    FROM animals_dataset.audio_data_mm\n    WHERE AI.IF(\n      prompt => ('Does this audio contain an elephant sound? ', audio),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    GROUP BY City\n    ORDER BY COUNT(*) DESC\n    LIMIT 1\n",
+    "result_city": "Mombasa",
+    "score": {
+      "score": 1.0,
+      "in_gt": true
+    },
+    "latency_breakdown": {
+      "wall_s": 301.1273114681244,
+      "slot_ms": 439252
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 66,
+      "per_row_cost_usd": 0.0001961,
+      "total_cost_usd": 0.0129426
+    }
+  },
+  "cascade": {
+    "method": "Option E + client-side argmax",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE animals_dataset.q4_uncertain_mm AS\n    SELECT m.Animal, m.City, m.StationID, ot.ref AS audio\n    FROM animals_dataset.audio_data_files m\n    JOIN animals_dataset.audio_data_external ot ON ot.uri = m.AudioPath\n    WHERE m.AudioPath IN UNNEST(@uris)\n",
+      "latency_breakdown": {
+        "wall_s": 3.048503875732422,
+        "slot_ms": 7362
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT City, COUNT(*) AS cnt\n    FROM animals_dataset.q4_uncertain_mm\n    WHERE AI.IF(\n      prompt => ('Does this audio contain an elephant sound? ', audio),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    GROUP BY City\n",
+      "bq_pos_by_city": {
+        "Kisumu": 2,
+        "Mombasa": 4,
+        "Nairobi": 2,
+        "Eldoret": 1
+      },
+      "latency_breakdown": {
+        "wall_s": 8.60939621925354,
+        "slot_ms": 26974
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 13,
+        "per_row_cost_usd": 0.0001961,
+        "total_cost_usd": 0.0025493
+      }
+    },
+    "total_count_by_city": {
+      "Kisumu": 2,
+      "Mombasa": 4,
+      "Nairobi": 2,
+      "Eldoret": 1
+    },
+    "cascade_city": "Mombasa",
+    "score": {
+      "score": 1.0,
+      "in_gt": true
+    },
+    "totals": {
+      "wall_s": 11.657900094985962,
+      "slot_ms_bq_total": 34336,
+      "cost_usd": 0.0025493,
+      "n_llm_calls": 13
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 1.0,
+      "paper_DASE_NN": 1.0,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 9.4,
+      "paper_DASE_NN": 0.0008,
+      "ours_BQ": 301.1273114681244,
+      "ours_cascade": 11.657900094985962
+    },
+    "cost_usd": {
+      "paper_BQ": 0.01,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.0129426,
+      "ours_cascade": 0.0025493
+    },
+    "n_llm_calls": {
+      "paper_BQ": 51,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 66,
+      "ours_cascade": 13
+    }
+  }
+}

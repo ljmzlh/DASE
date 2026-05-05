@@ -1,0 +1,115 @@
+{
+  "scenario": "mmqa",
+  "query_id": "7",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "operator": "sem-join (cross-modal: airline \u00d7 image)",
+  "cascade_strategy": "embedding-distance prefilter",
+  "params": {
+    "GAP": 0.05
+  },
+  "prompt_prefix": "You will be provided with an airline name and an image. Determine if the image shows the logo of the airline",
+  "data": {
+    "n_airlines_distinct": 135,
+    "n_images": 200,
+    "n_gt_pairs": 5,
+    "gt_pairs": [
+      [
+        "British Airways",
+        "cwncgabxti09zmf36t4phvaz1xzv10wu.png"
+      ],
+      [
+        "Edelweiss Air",
+        "6zpijbg5jv4jftpftpmla6xbizne28d9.png"
+      ],
+      [
+        "Virgin Atlantic",
+        "antbx4oxst0z5o6pe2g1thrjr0dz073j.png"
+      ],
+      [
+        "Discover Airlines",
+        "nqr1pjql5qs3dp8rz2a4zzq7rn0xyp6k.png"
+      ],
+      [
+        "Delta Air Lines",
+        "1sz0kf8wcmj0q8n3pu6mg61gl158vvz1.png"
+      ]
+    ]
+  },
+  "dase_partition": {
+    "n_candidate_pairs": 1378,
+    "cands_per_airline_stats": {
+      "min": 1,
+      "median": 10.0,
+      "max": 22
+    }
+  },
+  "cascade": {
+    "method": "airline\u00d7image embed prefilter sim\u2265top1-0.05; BQ AI.IF on borderline",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE mmqa.q7_uncertain AS\n    SELECT airline_name, ot.uri AS uri, ot.ref AS image\n    FROM UNNEST(@airlines) AS airline_name WITH OFFSET pos\n    JOIN UNNEST(@uris) AS u WITH OFFSET pos2 ON pos = pos2\n    JOIN mmqa.images ot ON ot.uri = u\n",
+    "stage1_wall_s": 2.7231240272521973,
+    "stage1_slot_ms": 7239,
+    "stage2_sql": "SELECT airline_name AS airline, uri FROM mmqa.q7_uncertain\n    WHERE AI.IF(\n      (CONCAT('You will be provided with an airline name and an image. Determine if the image shows the logo of the airline. Airline: ', airline_name, '.'), image),\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "stage2_wall_s": 10.598913192749023,
+    "stage2_slot_ms": 72284,
+    "result_pairs": [
+      [
+        "British Airways",
+        "cwncgabxti09zmf36t4phvaz1xzv10wu.png"
+      ],
+      [
+        "Delta Air Lines",
+        "1sz0kf8wcmj0q8n3pu6mg61gl158vvz1.png"
+      ],
+      [
+        "Discover Airlines",
+        "nqr1pjql5qs3dp8rz2a4zzq7rn0xyp6k.png"
+      ],
+      [
+        "Edelweiss Air",
+        "6zpijbg5jv4jftpftpmla6xbizne28d9.png"
+      ],
+      [
+        "Virgin Atlantic",
+        "antbx4oxst0z5o6pe2g1thrjr0dz073j.png"
+      ]
+    ],
+    "score": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "totals": {
+      "wall_s": 13.32203722000122,
+      "slot_ms_bq_total": 79523,
+      "cost_usd": 0.040651,
+      "n_llm_calls": 1378
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.0,
+      "paper_DASE_NN": 0.1,
+      "ours_BQ": 0.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 91.7,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 91.7,
+      "ours_cascade": 6.909065
+    },
+    "cost_usd": {
+      "paper_BQ": 1.18,
+      "paper_DASE_NN": 0.01,
+      "ours_BQ": 1.18,
+      "ours_cascade": 0.040651
+    },
+    "n_llm_calls": {
+      "paper_BQ": 40000,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 40000,
+      "ours_cascade": 1378
+    }
+  }
+}

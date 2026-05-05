@@ -1,0 +1,129 @@
+{
+  "scenario": "mmqa",
+  "query_id": "2b",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "logo_prompt_prefix": "You will be provided with a horse racetrack name and an image. Determine if the image shows the logo of the racetrack",
+  "color_prompt": "What is the dominant color of the logo in this image? Only respond with the color name",
+  "params": {
+    "LOGO_LO": 0.02,
+    "TRACK_GAP": 0.1
+  },
+  "dase_prompts": {
+    "logo_positive": [
+      "a logo or wordmark as the main subject of the image",
+      "a brand emblem or typographic logo as the primary visual focus"
+    ],
+    "logo_negative": [
+      "a photograph where the main subject is not a logo, such as people, animals, or action",
+      "a candid or landscape image where no logo or wordmark is the primary focus"
+    ]
+  },
+  "cascade_form": "Stage A sem-join (logo cross-join): distribution-shape prefilter on cos(track,caption); borderline (track,image) pairs sent to BQ AI.IF. Stage B sem-extract (color): cluster Stage A output by image_filename (same image always same color); ONE AI.GENERATE per unique image; propagate color back to all (ID, image) pairs sharing that image",
+  "data": {
+    "n_images": 200,
+    "n_tracks": 6,
+    "tracks": [
+      "Bay Meadows",
+      "Churchill Downs",
+      "Del Mar Racetrack",
+      "Hollywood Park Racetrack",
+      "Oak Tree at Santa Anita Park",
+      "Santa Anita Park"
+    ],
+    "n_pairs": 1200,
+    "n_gt_triples": 5
+  },
+  "dase_partition": {
+    "n_dropped_not_logo": 107,
+    "n_logo_candidate_images": 93,
+    "n_pairs_to_bq": 554
+  },
+  "calibration": {
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 9716,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0029773,
+    "per_row_cost_usd": 0.00059546,
+    "elapsed_s": 5.059069633483887
+  },
+  "baseline": {
+    "_status": "skipped (1200 cross-join AI.IF + 5 AI.GENERATE)",
+    "score": {
+      "f1": 0.0,
+      "_source": "paper Table 4 (TBD mapping)"
+    },
+    "latency_breakdown": {
+      "wall_s": 66.7
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 1205,
+      "per_pair_cost_usd": 0.00059546,
+      "total_cost_usd": 0.109,
+      "_source": "estimated"
+    },
+    "_status_note": "paper-copy from sembench/docs/static/data/paper-2025-10-01/mmqa/metrics/bigquery.json"
+  },
+  "cascade": {
+    "method": "Stage A sem-join (q2a) + Stage B sem-extract (cluster by image_filename + 1 AI.GENERATE per cluster)",
+    "stage_a_sql": "\n    SELECT track, uri\n    FROM mmqa.q2b_uncertain_pairs\n    WHERE AI.IF(\n      (CONCAT('You will be provided with a horse racetrack name and an image. Determine if the image shows the logo of the racetrack. Racetrack: ', track, '.'), image),\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+    "stage_a_n_pairs_to_bq": 554,
+    "stage_a_n_verified": 1,
+    "stage_a_pred_pairs": 2,
+    "stage_a_wall_s": 306.27747917175293,
+    "stage_a_slot_ms": 3959466,
+    "stage_b_sql": "\n        SELECT @uri_0 AS uri, AI.GENERATE(\n          ('What is the dominant color of the logo in this image? Only respond with the color name.', ot.ref),\n          connection_id => 'us.connection',\n          endpoint => 'gemini-2.5-flash'\n        ).result AS color\n        FROM mmqa.images ot\n        WHERE ot.uri = @uri_0",
+    "stage_b_n_unique_images": 1,
+    "stage_b_color_map": {
+      "117d500aaa630023c4038b8268b309c0.png": "blue"
+    },
+    "stage_b_wall_s": 4.8936004638671875,
+    "stage_b_slot_ms": 9356,
+    "score": {
+      "precision": 1.0,
+      "recall": 0.4,
+      "f1": 0.5714285714285715
+    },
+    "totals": {
+      "wall_s": 311.1710796356201,
+      "slot_ms_bq_total": 3968822,
+      "cost_usd": 0.3304803,
+      "n_llm_calls": 555,
+      "n_llm_calls_breakdown": {
+        "stage_a_aiif": 554,
+        "stage_b_aigen": 1
+      }
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.0,
+      "paper_DASE_NN": 0.08,
+      "ours_BQ": 0.0,
+      "ours_cascade": 0.5714285714285715
+    },
+    "wall_s": {
+      "paper_BQ": 38.4,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 38.4,
+      "ours_cascade": 21.43630705394191
+    },
+    "cost_usd": {
+      "paper_BQ": 0.12,
+      "paper_DASE_NN": 0.01,
+      "ours_BQ": 0.12,
+      "ours_cascade": 0.05526970954356846
+    },
+    "n_llm_calls": {
+      "paper_BQ": 1205,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 1205,
+      "ours_cascade": 555
+    }
+  },
+  "_paper_source": "MMQA Scenario)"
+}

@@ -1,0 +1,192 @@
+{
+  "scenario": "movie",
+  "query_id": 8,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Determine if the following movie review is clearly positive, review:",
+  "structural_filter": "id = 'taken_3'",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "cascade_form": "Option E (staging table movie.q3_uncertain reused from Q3); cascade_POSITIVE = |dase confident_pos| + BQ_pos_on_uncertain (= Q3 cascade_count); cascade_NEGATIVE = scope_size - cascade_POSITIVE",
+  "_derivation_note": "Q8 derived from Q3.json. Q3 and Q8 share the same row-level sem_filter on (id='taken_3', 'clearly positive') over the same 120-row scope; they differ only in aggregation form (Q3 = COUNT(True rows); Q8 = CASE WHEN ... GROUP BY label \u2192 POSITIVE / NEGATIVE counts). The per-row LLM work and classification outputs are identical, so Q8 = Q3 + (scope_size - Q3_count) for the NEGATIVE bucket. BQ was NOT re-run; latency/cost/slot_ms inherit from Q3.json",
+  "data": {
+    "n_reviews_total_dedup": 1865,
+    "n_reviews_in_scope": 120,
+    "n_gt_positive_in_scope": 14,
+    "n_gt_negative_in_scope": 106
+  },
+  "dase_breakdown": {
+    "data_load_dedup_filter_s": 0.0461122989654541,
+    "embed_prompts_s": 1.247100591659546,
+    "margin_compute_s": 0.003605365753173828,
+    "partition_s": 0.0010581016540527344,
+    "total_s": 1.2978763580322266
+  },
+  "dase_partition": {
+    "n_uncertain": 24,
+    "n_confident_total": 96,
+    "n_confident_pos": 10,
+    "n_confident_neg": 86,
+    "uncertain_reviewIds": [
+      2241409,
+      2241639,
+      2241817,
+      2241537,
+      2241553,
+      2241827,
+      2241491,
+      2321621,
+      2241513,
+      2323318,
+      2241669,
+      2606639,
+      2241618,
+      2241670,
+      2241868,
+      2241599,
+      2241675,
+      2241700,
+      2241881,
+      2241399,
+      2241798,
+      2241268,
+      2644654,
+      2241666
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL + thinking_budget=0",
+    "scope": "id='taken_3'",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 463,
+      "prompt_audio": 0,
+      "output": 53,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0002714,
+    "per_row_cost_usd": 2.7139999999999998e-05,
+    "elapsed_s": 2.024188995361328
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q8.sql verbatim on movie.reviews (model_params stripped) \u2014 DERIVED FROM Q3 BASELINE",
+    "sql": "SELECT\n  sentiment_label AS scoreSentiment,\n  COUNT(*) AS count\nFROM (\n  SELECT\n    CASE WHEN AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    ) THEN 'POSITIVE' ELSE 'NEGATIVE' END AS sentiment_label\n  FROM movie.reviews AS r\n  WHERE r.id = 'taken_3'\n) AS sentiment_results\nGROUP BY sentiment_label",
+    "result_counts": {
+      "POSITIVE": 6,
+      "NEGATIVE": 114
+    },
+    "score": {
+      "relative_error": 0.32345013477088946,
+      "score": 0.7556008146639512,
+      "_per_class_rel_err": {
+        "POSITIVE": 0.5714285714285714,
+        "NEGATIVE": 0.07547169811320754
+      }
+    },
+    "latency_breakdown": {
+      "wall_s": 3.3107852935791016,
+      "slot_ms": 16397
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 120,
+      "n_llm_calls_method": "scope size (Q8 no LIMIT, all rows evaluated)",
+      "per_row_cost_usd": 2.7139999999999998e-05,
+      "total_cost_usd": 0.0032568
+    }
+  },
+  "cascade": {
+    "method": "Option E (shared staging with Q3): dase margin \u2192 CTAS uncertain band \u2192 original Q8 SQL on staging; merge dase_confident classifications + bq classifications; output (POSITIVE, NEGATIVE) counts",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE movie.q3_uncertain AS\n    SELECT * FROM movie.reviews\n    WHERE reviewId IN (2241409,2241639,2241817,2241537,2241553,2241827,2241491,2321621,2241513,2323318,2241669,2606639,2241618,2241670,2241868,2241599,2241675,2241700,2241881,2241399,2241798,2241268,2644654,2241666)\n",
+      "latency_breakdown": {
+        "wall_s": 2.166717290878296,
+        "slot_ms": 1861
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT\n  sentiment_label AS scoreSentiment,\n  COUNT(*) AS count\nFROM (\n  SELECT\n    CASE WHEN AI.IF(\n      ('Determine if the following movie review is clearly positive, review: ', r.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    ) THEN 'POSITIVE' ELSE 'NEGATIVE' END AS sentiment_label\n  FROM movie.q3_uncertain AS r\n  WHERE r.id = 'taken_3'\n) AS sentiment_results\nGROUP BY sentiment_label",
+      "result_counts": {
+        "POSITIVE": 11,
+        "NEGATIVE": 109
+      },
+      "result_breakdown": {
+        "dase_confident_pos": 10,
+        "bq_pos_on_uncertain": 1,
+        "dase_confident_neg": 86,
+        "bq_neg_on_uncertain": 23
+      },
+      "latency_breakdown": {
+        "wall_s": 2.782158136367798,
+        "slot_ms": 9306
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 24,
+        "n_llm_calls_method": "n_uncertain (Stage 2 no LIMIT, staging size)",
+        "per_row_cost_usd": 2.7139999999999998e-05,
+        "total_cost_usd": 0.0006513599999999999
+      }
+    },
+    "score": {
+      "relative_error": 0.12129380053908355,
+      "score": 0.8918269230769231,
+      "_per_class_rel_err": {
+        "POSITIVE": 0.21428571428571427,
+        "NEGATIVE": 0.02830188679245283
+      }
+    },
+    "totals": {
+      "wall_s": 6.24675178527832,
+      "wall_breakdown_s": {
+        "dase": 1.2978763580322266,
+        "bq_stage1_ctas": 2.166717290878296,
+        "bq_stage2_aiif": 2.782158136367798
+      },
+      "slot_ms_bq_total": 11167,
+      "cost_usd": 0.0006513599999999999,
+      "n_llm_calls": 24
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper": 0.76,
+      "baseline": 0.7556008146639512,
+      "cascade": 0.8918269230769231
+    },
+    "wall_s": {
+      "paper": 10.9,
+      "baseline": 3.3107852935791016,
+      "cascade_total": 6.24675178527832,
+      "cascade_bq_stage2": 2.782158136367798
+    },
+    "slot_ms_bq": {
+      "baseline": 16397,
+      "cascade_total": 11167,
+      "cascade_stage2": 9306
+    },
+    "cost_usd": {
+      "paper": 0.003,
+      "baseline": 0.0032568,
+      "cascade": 0.0006513599999999999
+    },
+    "n_llm_calls": {
+      "paper_implied": 737,
+      "baseline": 120,
+      "cascade": 24
+    }
+  }
+}

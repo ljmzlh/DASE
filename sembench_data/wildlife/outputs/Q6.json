@@ -1,0 +1,186 @@
+{
+  "scenario": "wildlife",
+  "query_id": 6,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "image_prompt": "Does this image contain a monkey?",
+  "audio_prompt": "Does this audio contain a monkey sound?",
+  "params": {
+    "alpha": 0.5
+  },
+  "dase_image_prompts": {
+    "positive": [
+      "a photograph of a monkey",
+      "a wildlife camera trap image showing a monkey",
+      "a monkey captured in the photo"
+    ],
+    "negative": [
+      "a photograph that does not contain a monkey",
+      "a wildlife camera trap image of a non-monkey animal",
+      "an animal photo without any monkey"
+    ]
+  },
+  "dase_audio_prompts": {
+    "positive": [
+      "a sound recording of a monkey",
+      "audio of monkey vocalizations or calls",
+      "monkey howling or chittering sound clip"
+    ],
+    "negative": [
+      "a sound recording of an animal that is not a monkey",
+      "audio of a non-monkey animal vocalization",
+      "animal sound clip without any monkey"
+    ]
+  },
+  "cascade_form": "Option E + dual-modality + client-side set difference. Stage 2 is two separate AI.IF DISTINCT-city queries (image, audio), NOT a verbatim swap of Q6.sql, because NOT EXISTS over a staging table containing only uncertain rows would miss dase-confident monkey audio rows",
+  "data": {
+    "n_images": 200,
+    "n_audios": 66,
+    "gt_image_monkey_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "gt_audio_monkey_cities": [
+      "Nairobi",
+      "Nakuru"
+    ],
+    "gt_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa"
+    ]
+  },
+  "dase_partition": {
+    "image_uncertain": 100,
+    "audio_uncertain": 33,
+    "dase_image_monkey_cities": [],
+    "dase_audio_monkey_cities": []
+  },
+  "calibration": {
+    "image": {
+      "n_sample": 5,
+      "tokens_total": {
+        "prompt_other": 9085,
+        "prompt_audio": 0,
+        "output": 25,
+        "thoughts": 0
+      },
+      "sample_cost_usd": 0.002788,
+      "per_row_cost_usd": 0.0005576,
+      "elapsed_s": 4.609443187713623
+    },
+    "audio": {
+      "n_sample": 5,
+      "tokens_total": {
+        "prompt_other": 60,
+        "prompt_audio": 900,
+        "output": 29,
+        "thoughts": 0
+      },
+      "sample_cost_usd": 0.0009905,
+      "per_row_cost_usd": 0.00019810000000000002,
+      "elapsed_s": 12.734718084335327
+    }
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q6.sql verbatim with NOT EXISTS",
+    "sql": "\n    SELECT DISTINCT I.City AS city\n    FROM animals_dataset.image_data_mm I\n    WHERE AI.IF(('Does this image contain a monkey? ', I.image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n    AND NOT EXISTS (\n      SELECT * FROM animals_dataset.audio_data_mm A\n      WHERE A.City = I.City\n      AND AI.IF(('Does this audio contain a monkey sound? ', A.audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n    )\n",
+    "result_cities": [
+      "Eldoret",
+      "Nakuru"
+    ],
+    "score": {
+      "f1": 0.4
+    },
+    "latency_breakdown": {
+      "wall_s": 336.66034054756165,
+      "slot_ms": 1631300
+    },
+    "cost_breakdown": {
+      "n_llm_calls_rough_lower_bound": 266,
+      "total_cost_usd_rough": 0.1245946
+    }
+  },
+  "cascade": {
+    "method": "Option E dual-modality + client-side set diff",
+    "stage1_sqls": [
+      "\n    CREATE OR REPLACE TABLE animals_dataset.q6_image_uncertain_mm AS\n    SELECT m.Species, m.City, m.StationID, ot.ref AS image\n    FROM animals_dataset.image_data_images m\n    JOIN animals_dataset.image_data_external ot ON ot.uri = m.ImagePath\n    WHERE m.ImagePath IN UNNEST(@uris)\n",
+      "\n    CREATE OR REPLACE TABLE animals_dataset.q6_audio_uncertain_mm AS\n    SELECT m.Animal, m.City, m.StationID, ot.ref AS audio\n    FROM animals_dataset.audio_data_files m\n    JOIN animals_dataset.audio_data_external ot ON ot.uri = m.AudioPath\n    WHERE m.AudioPath IN UNNEST(@uris)\n"
+    ],
+    "stage1_wall_s": 4.927151441574097,
+    "stage1_slot_ms": 14964,
+    "stage2_sqls": [
+      "\n    SELECT DISTINCT City FROM animals_dataset.q6_image_uncertain_mm\n    WHERE AI.IF(('Does this image contain a monkey? ', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+      "\n    SELECT DISTINCT City FROM animals_dataset.q6_audio_uncertain_mm\n    WHERE AI.IF(('Does this audio contain a monkey sound? ', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n"
+    ],
+    "bq_image_monkey_cities_on_uncertain": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "bq_audio_monkey_cities_on_uncertain": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi"
+    ],
+    "stage2_wall_s": 360.05943179130554,
+    "stage2_slot_ms": 1841896,
+    "image_monkey_cities_combined": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "audio_monkey_cities_combined": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi"
+    ],
+    "cascade_cities": [
+      "Eldoret",
+      "Nakuru"
+    ],
+    "score": {
+      "f1": 0.4
+    },
+    "totals": {
+      "wall_s": 364.98658323287964,
+      "slot_ms_bq_total": 1856860,
+      "cost_usd": 0.0622973,
+      "n_llm_calls": 133
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.2,
+      "paper_DASE_NN": 0.0,
+      "ours_BQ": 0.4,
+      "ours_cascade": 0.4
+    },
+    "wall_s": {
+      "paper_BQ": 24.3,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 336.66034054756165,
+      "ours_cascade": 364.98658323287964
+    },
+    "cost_usd": {
+      "paper_BQ": 0.12,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.1245946,
+      "ours_cascade": 0.0622973
+    },
+    "n_llm_calls": {
+      "paper_BQ": 318,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 266,
+      "ours_cascade": 133
+    }
+  }
+}

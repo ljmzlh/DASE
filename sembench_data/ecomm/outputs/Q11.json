@@ -1,0 +1,163 @@
+{
+  "scenario": "ecomm",
+  "query_id": 11,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "acc_price_limit": 500,
+    "tau_high_role": 0.05,
+    "tau_low_role": -0.02,
+    "pair_tau_low": 0.75,
+    "stage_batch": 300
+  },
+  "cascade_form": "Stage 0 dase contrastive 4-role margin (image-cap emb, anchors=BQ prompts) \u2192 Stage 1 BQ unary AI.IF on uncertain images (4 queries) \u2192 pool union \u2192 Stage 2 dase pair cos sim drop (PAIR_TAU_LOW=0.75) on (s,l)/(l,u)/(u,a) \u2192 Stage 3 BQ same-brand AI.IF on uncertain pairs (3 queries \u00d7 batches) \u2192 Stage 4 quadruple assembly. No structural leakage (articleType/masterCategory/subCategory/brandName/baseColour='Black' avoided)",
+  "dase_breakdown": {
+    "data_load_dase_s": 2.070680856704712
+  },
+  "dase_partition": {
+    "shoe": {
+      "n_confident_yes": 65,
+      "n_uncertain": 396,
+      "n_confident_no": 39
+    },
+    "lower": {
+      "n_confident_yes": 1,
+      "n_uncertain": 476,
+      "n_confident_no": 23
+    },
+    "upper": {
+      "n_confident_yes": 0,
+      "n_uncertain": 345,
+      "n_confident_no": 155
+    },
+    "accessory": {
+      "n_confident_yes": 2,
+      "n_uncertain": 70,
+      "n_confident_no": 428
+    }
+  },
+  "data": {
+    "n_products_in_scope": 500,
+    "scope_filter": "ALL 500 (acc side: price<=500)",
+    "n_gt_quadruples": 18
+  },
+  "calibration": {
+    "unary": {
+      "per_row_cost_usd": 0.0010214,
+      "n_sample": 10,
+      "elapsed_s": 301.71935749053955,
+      "tokens": {
+        "prompt_other": 33630,
+        "prompt_audio": 0,
+        "output": 50,
+        "thoughts": 0
+      }
+    },
+    "pair": {
+      "per_row_cost_usd": 0.00026389999999999996,
+      "n_sample": 10,
+      "elapsed_s": 11.146766662597656,
+      "tokens": {
+        "prompt_other": 8380,
+        "prompt_audio": 0,
+        "output": 50,
+        "thoughts": 0
+      }
+    }
+  },
+  "baseline": {
+    "_status": "aborted",
+    "_status_note": "BQ template = 500^3 \u00d7 89 \u00d7 7 AI.IF \u2248 78B LLM calls, infeasible. Paper Q11 ecomm BQ = X",
+    "score": {
+      "f1_score": null,
+      "_source": "paper Table 4 \u2014 X"
+    },
+    "latency_breakdown": {
+      "wall_s": null,
+      "_source": "paper \u2014 X"
+    },
+    "cost_breakdown": {
+      "n_llm_calls": null,
+      "_source": "paper \u2014 X"
+    }
+  },
+  "cascade": {
+    "method": "Stage 0 dase contrastive 4-role margin \u2192 Stage 1 BQ unary AI.IF (4 queries \u00d7 batches, cached) \u2192 pool union \u2192 Stage 2 dase pair cos sim drop \u2192 Stage 3 BQ same-brand AI.IF (3 queries \u00d7 batches) \u2192 Stage 4 quadruple assembly",
+    "stage1_unary_walls_s": {
+      "shoe": 600.9445722103119,
+      "lower": 611.8741652965546,
+      "upper": 642.891101360321,
+      "accessory": 301.26111793518066
+    },
+    "stage1_unary_slots_ms": {
+      "shoe": 713310,
+      "lower": 1781641,
+      "upper": 2337979,
+      "accessory": 818779
+    },
+    "stage3_pair_walls_s": {
+      "sl": 900.8500711917877,
+      "lu": 305.64213514328003,
+      "ua": 4.813266038894653
+    },
+    "stage3_pair_slots_ms": {
+      "sl": 3081721,
+      "lu": 284032,
+      "ua": 36797
+    },
+    "stage_ctas_walls_s": {
+      "sl": 6.449905872344971,
+      "lu": 3.847748041152954,
+      "ua": 2.035008668899536
+    },
+    "n_returned_quadruples": 72,
+    "score": {
+      "precision": 0.25,
+      "recall": 1.0,
+      "f1_score": 0.4
+    },
+    "totals": {
+      "wall_s": 3382.6797726154327,
+      "wall_breakdown_s": {
+        "dase_stage0": 2.070680856704712,
+        "bq_stage1_unary": 2156.970956802368,
+        "bq_stage_ctas": 12.332662582397461,
+        "bq_stage3_pair": 1211.3054723739624
+      },
+      "slot_ms_bq_total": 9071455,
+      "cost_usd": 1.6829462,
+      "n_llm_calls": 2683,
+      "n_llm_calls_breakdown": {
+        "stage1_unary": 1287,
+        "stage3_pair": 1396
+      }
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": 0.4
+    },
+    "wall_s": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": 3382.6797726154327
+    },
+    "cost_usd": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": 1.6829462
+    },
+    "n_llm_calls": {
+      "paper_BQ": null,
+      "paper_DASE_NN": 0,
+      "ours_BQ": null,
+      "ours_cascade": 2683
+    }
+  }
+}

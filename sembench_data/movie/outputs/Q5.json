@@ -1,0 +1,243 @@
+{
+  "scenario": "movie",
+  "query_id": 5,
+  "scale_factor": 2000,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "pair_prompt_prefix": "These two movie reviews express the same sentiment - either both are positive or both are negative. Review 1:",
+  "pair_prompt_sep": "Review 2:",
+  "structural_filter": "r1.id = 'ant_man_and_the_wasp_quantumania'",
+  "params": {
+    "K_pos": 5,
+    "K_neg": 5,
+    "target_pairs": 10
+  },
+  "dase_prompts": {
+    "positive": [
+      "this is a clearly positive movie review",
+      "the reviewer praises the film and recommends it",
+      "an enthusiastic, favorable review of the movie"
+    ],
+    "negative": [
+      "this is a clearly negative movie review",
+      "the reviewer criticizes the film and dislikes it",
+      "an unfavorable, dismissive review of the movie"
+    ]
+  },
+  "cascade_form": "Option E (staging table movie.q567_candidates with K_pos+K_neg most-confident reviews); original sembench Q5.sql runs verbatim with table-name swap",
+  "data": {
+    "n_reviews_total_dedup": 1865,
+    "n_reviews_in_scope": 128,
+    "n_gt_positive_in_scope": 66,
+    "n_gt_negative_in_scope": 62
+  },
+  "dase_breakdown": {
+    "data_load_dedup_filter_s": 0.04622769355773926,
+    "embed_prompts_s": 1.2996594905853271,
+    "margin_compute_s": 0.003926277160644531,
+    "rank_topk_s": 0.0005555152893066406,
+    "total_s": 1.3503689765930176
+  },
+  "dase_partition": {
+    "K_pos": 5,
+    "K_neg": 5,
+    "staging_size": 10,
+    "ordered_pairs_in_staging": 90,
+    "pos_reviewIds": [
+      102781777,
+      102780006,
+      102779524,
+      102780625,
+      102779496
+    ],
+    "pos_margins": [
+      0.1488078236579895,
+      0.1341177225112915,
+      0.12177741527557373,
+      0.10882568359375,
+      0.10636425018310547
+    ],
+    "neg_reviewIds": [
+      102781269,
+      102780627,
+      102780917,
+      102779743,
+      102779555
+    ],
+    "neg_margins": [
+      -0.13152945041656494,
+      -0.12183153629302979,
+      -0.11866438388824463,
+      -0.11520588397979736,
+      -0.10601937770843506
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on pair prompt + thinking_budget=0",
+    "n_sample_pairs": 5,
+    "tokens_total": {
+      "prompt_other": 822,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0003091,
+    "per_pair_cost_usd": 6.182e-05,
+    "elapsed_s": 5.563440322875977
+  },
+  "baseline": {
+    "_status": "aborted",
+    "_status_note": "Baseline NOT re-run on our project. A prior attempt observed wall=301.6s (BQ slot starvation; paper reports 54.5s) and BQ returned 10 pairs but the script crashed before F1 evaluation due to an int() bug on the string id column. Per project policy (skip baseline if too slow \u2192 use paper numbers), we substitute paper Table 4(a) values as the canonical baseline reference",
+    "method": "sembench bigquery/Q5.sql verbatim on movie.reviews \u2014 NOT EXECUTED in this run",
+    "sql": "\n    SELECT r1.id, r1.reviewId AS reviewId1, r2.reviewId AS reviewId2\n    FROM movie.reviews AS r1\n    JOIN movie.reviews AS r2\n    ON r1.id = r2.id AND r1.reviewId <> r2.reviewId\n    WHERE r1.id = 'ant_man_and_the_wasp_quantumania' AND AI.IF(\n      ('These two movie reviews express the same sentiment - either both are positive or both are negative. Review 1: ', r1.reviewText, ', Review 2: ', r2.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 10\n",
+    "score": {
+      "precision": null,
+      "recall": null,
+      "f1": 0.89,
+      "_source": "paper Table 4(a)"
+    },
+    "latency_breakdown": {
+      "wall_s": 54.5,
+      "slot_ms": null,
+      "_source": "paper Table 4(a)"
+    },
+    "cost_breakdown": {
+      "n_llm_calls_est": 16338,
+      "n_llm_calls_method": "paper $1.01 / per_pair_cost (our calibration)",
+      "per_pair_cost_usd": 6.182e-05,
+      "total_cost_usd": 1.01,
+      "_source": "paper Table 4(a) cost; n_calls back-derived using our per_pair calibration"
+    },
+    "prior_attempt_observed": {
+      "wall_s": 301.6,
+      "slot_ms": 3518165,
+      "est_calls": 1407,
+      "cost_usd_estimate": 0.087,
+      "returned_pair_count": 10,
+      "f1": null
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase top K_pos +highest margin, top K_neg -lowest margin \u2192 CTAS staging \u2192 original Q5 SQL on staging",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE movie.q567_candidates AS\n    SELECT * FROM movie.reviews\n    WHERE reviewId IN (102781777,102780006,102779524,102780625,102779496,102781269,102780627,102780917,102779743,102779555)\n",
+      "latency_breakdown": {
+        "wall_s": 2.2149505615234375,
+        "slot_ms": 3296
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT r1.id, r1.reviewId AS reviewId1, r2.reviewId AS reviewId2\n    FROM movie.q567_candidates AS r1\n    JOIN movie.q567_candidates AS r2\n    ON r1.id = r2.id AND r1.reviewId <> r2.reviewId\n    WHERE r1.id = 'ant_man_and_the_wasp_quantumania' AND AI.IF(\n      ('These two movie reviews express the same sentiment - either both are positive or both are negative. Review 1: ', r1.reviewText, ', Review 2: ', r2.reviewText),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n    LIMIT 10\n",
+      "result_pairs": [
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779555,
+          102780627
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779555,
+          102780917
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779743,
+          102779555
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779743,
+          102781269
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779743,
+          102781269
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102780627,
+          102779555
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102780917,
+          102779555
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102781269,
+          102779555
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102781269,
+          102780627
+        ],
+        [
+          "ant_man_and_the_wasp_quantumania",
+          102779496,
+          102780625
+        ]
+      ],
+      "score": {
+        "precision": 1.0,
+        "recall": 0.7,
+        "f1": 0.8235294117647058
+      },
+      "latency_breakdown": {
+        "wall_s": 3.084151029586792,
+        "slot_ms": 13545
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 10,
+        "n_llm_calls_method": "min(max(round(slot_ms/2500), |returned|), staging_pairs); BQ short-circuits at LIMIT 10",
+        "per_pair_cost_usd": 6.182e-05,
+        "total_cost_usd": 0.0006182
+      }
+    },
+    "totals": {
+      "wall_s": 6.649470567703247,
+      "wall_breakdown_s": {
+        "dase": 1.3503689765930176,
+        "bq_stage1_ctas": 2.2149505615234375,
+        "bq_stage2_aiif": 3.084151029586792
+      },
+      "slot_ms_bq_total": 16841,
+      "cost_usd": 0.0006182,
+      "n_llm_calls": 10
+    }
+  },
+  "comparison": {
+    "score_f1": {
+      "paper": 0.89,
+      "baseline": 0.89,
+      "cascade": 0.8235294117647058,
+      "_baseline_source": "paper (aborted)"
+    },
+    "wall_s": {
+      "paper": 54.5,
+      "baseline": 54.5,
+      "cascade_total": 6.649470567703247,
+      "cascade_bq_stage2": 3.084151029586792,
+      "_baseline_source": "paper (aborted)"
+    },
+    "slot_ms_bq": {
+      "baseline": null,
+      "cascade_total": 16841,
+      "cascade_stage2": 13545
+    },
+    "cost_usd": {
+      "paper": 1.01,
+      "baseline": 1.01,
+      "cascade": 0.0006182,
+      "_baseline_source": "paper (aborted)"
+    },
+    "n_llm_calls": {
+      "paper_implied": 16338,
+      "baseline_est": 16338,
+      "cascade": 10
+    }
+  }
+}

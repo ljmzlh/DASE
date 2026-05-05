@@ -1,0 +1,270 @@
+{
+  "scenario": "cars",
+  "query_id": 2,
+  "operator": "F",
+  "scale_factor": 19672,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "You are given an audio recording of car diagnostics. Return true if the car from the recording has a dead battery, false otherwise",
+  "structural_filter": "c.fuel_type = 'Electric'",
+  "params": {
+    "alpha": 0.5
+  },
+  "dase_prompts": {
+    "positive": [
+      "audio recording of a car with a dead battery",
+      "engine fails to start due to dead battery",
+      "clicking sound from a car ignition with no battery power"
+    ],
+    "negative": [
+      "audio of a car engine running normally",
+      "audio of mechanical issues unrelated to battery",
+      "engine sounds healthy with no electrical issue"
+    ]
+  },
+  "cascade_form": "Option E (staging table cars_dataset.q2_uncertain_audio_mm); audio multimodal; scope = electric cars \u2a1d audio (29 rows); cascade_car_ids = DISTINCT(dase_confident_pos_car_ids \u222a bq_pos_in_uncertain_car_ids)",
+  "data": {
+    "n_cars_total": 19672,
+    "n_audio_total": 175,
+    "n_electric_cars": 3936,
+    "n_rows_in_scope": 29,
+    "n_gt_positive_cars": 1
+  },
+  "dase_breakdown_s": {
+    "data_load": 0.05341458320617676,
+    "embed_prompts": 1.1780624389648438,
+    "margin_compute": 0.0015294551849365234,
+    "rank_topk_or_partition": 0.0009684562683105469,
+    "total": 1.2339749336242676
+  },
+  "dase_partition": {
+    "n_uncertain_rows": 14,
+    "n_confident_pos_cars": 0,
+    "n_confident_neg_rows": 15,
+    "uncertain_meta": [
+      {
+        "audio_id": 737,
+        "car_id": 123494,
+        "margin": -0.03864479064941406
+      },
+      {
+        "audio_id": 859,
+        "car_id": 192512,
+        "margin": -0.05575704574584961
+      },
+      {
+        "audio_id": 743,
+        "car_id": 90216,
+        "margin": -0.04273879528045654
+      },
+      {
+        "audio_id": 147,
+        "car_id": 78879,
+        "margin": 0.01141047477722168
+      },
+      {
+        "audio_id": 291,
+        "car_id": 178893,
+        "margin": -0.05034583806991577
+      },
+      {
+        "audio_id": 1258,
+        "car_id": 264876,
+        "margin": -0.028549373149871826
+      },
+      {
+        "audio_id": 926,
+        "car_id": 298804,
+        "margin": -0.0449376106262207
+      },
+      {
+        "audio_id": 1023,
+        "car_id": 38597,
+        "margin": -0.04749906063079834
+      },
+      {
+        "audio_id": 97,
+        "car_id": 98676,
+        "margin": -0.04529833793640137
+      },
+      {
+        "audio_id": 364,
+        "car_id": 60408,
+        "margin": -0.03956252336502075
+      },
+      {
+        "audio_id": 604,
+        "car_id": 246735,
+        "margin": -0.05817997455596924
+      },
+      {
+        "audio_id": 1042,
+        "car_id": 260612,
+        "margin": -0.0569988489151001
+      },
+      {
+        "audio_id": 853,
+        "car_id": 180333,
+        "margin": -0.019554197788238525
+      },
+      {
+        "audio_id": 157,
+        "car_id": 263701,
+        "margin": -0.02228569984436035
+      }
+    ]
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL multimodal (audio ref, Q2 prompt) + thinking_budget=0",
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 145,
+      "prompt_audio": 250,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.00035600000000000003,
+    "per_row_cost_usd": 7.120000000000001e-05,
+    "elapsed_s": 6.720384836196899
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q2.sql verbatim on cars_dataset.cars \u2a1d audio_mm",
+    "sql": "SELECT DISTINCT c.car_id\nFROM cars_dataset.cars AS c\nJOIN cars_dataset.audio_mm AS a ON c.car_id = a.car_id\nWHERE c.fuel_type = 'Electric'\n  AND AI.IF(\n    ('You are given an audio recording of car diagnostics. Return true if the car from the recording has a dead battery, false otherwise.', a.image),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "result_ids": [
+      38597,
+      63354,
+      78879,
+      90216,
+      96347,
+      98676,
+      123494,
+      178893,
+      180333,
+      192512,
+      203997,
+      205202,
+      230241,
+      232698,
+      246389,
+      252348,
+      256140,
+      260612,
+      263701,
+      263997,
+      286418
+    ],
+    "score": {
+      "precision": 0.047619047619047616,
+      "recall": 1.0,
+      "f1_score": 0.0909090909090909
+    },
+    "latency_breakdown": {
+      "wall_s": 43.15904903411865,
+      "slot_ms": 441899
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 29,
+      "n_llm_calls_method": "scope size (electric \u2a1d audio = 29)",
+      "per_row_cost_usd": 7.120000000000001e-05,
+      "total_cost_usd": 0.0020648000000000003
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase margin on audio caption emb \u2192 CTAS uncertain audio_mm \u2192 Q2.sql on staging; merge dase_confident_pos \u222a bq_pos_on_uncertain (both as DISTINCT car_id sets)",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE cars_dataset.q2_uncertain_audio_mm AS\n    SELECT m.audio_id, m.car_id, ot.ref AS image\n    FROM cars_dataset.car_audio m\n    JOIN cars_dataset.cars_audios ot\n      ON ot.uri = m.audio_path\n    WHERE m.audio_path IN UNNEST(@uris)\n",
+      "latency_breakdown": {
+        "wall_s": 2.3652522563934326,
+        "slot_ms": 2952
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT DISTINCT c.car_id\nFROM cars_dataset.cars AS c\nJOIN cars_dataset.q2_uncertain_audio_mm AS a ON c.car_id = a.car_id\nWHERE c.fuel_type = 'Electric'\n  AND AI.IF(\n    ('You are given an audio recording of car diagnostics. Return true if the car from the recording has a dead battery, false otherwise.', a.image),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "result_bq_pos_cars_in_uncertain": [
+        38597,
+        78879,
+        90216,
+        98676,
+        123494,
+        178893,
+        180333,
+        192512,
+        260612,
+        263701,
+        264876
+      ],
+      "latency_breakdown": {
+        "wall_s": 33.670533657073975,
+        "slot_ms": 98693
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 14,
+        "n_llm_calls_method": "n_uncertain (staging size)",
+        "per_row_cost_usd": 7.120000000000001e-05,
+        "total_cost_usd": 0.0009968000000000002
+      }
+    },
+    "result_ids": [
+      38597,
+      78879,
+      90216,
+      98676,
+      123494,
+      178893,
+      180333,
+      192512,
+      260612,
+      263701,
+      264876
+    ],
+    "score": {
+      "precision": 0.09090909090909091,
+      "recall": 1.0,
+      "f1_score": 0.16666666666666669
+    },
+    "totals": {
+      "wall_s": 37.269760847091675,
+      "wall_breakdown_s": {
+        "dase": 1.2339749336242676,
+        "bq_stage1_ctas": 2.3652522563934326,
+        "bq_stage2_aiif": 33.670533657073975
+      },
+      "slot_ms_bq_total": 101645,
+      "cost_usd": 0.0009968000000000002,
+      "n_llm_calls": 14
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.08,
+      "paper_DASE_NN": 0.0,
+      "ours_BQ": 0.0909090909090909,
+      "ours_cascade": 0.16666666666666669,
+      "_baseline_source": "ours"
+    },
+    "wall_s": {
+      "paper_BQ": 14.1,
+      "paper_DASE_NN": 0.7,
+      "ours_BQ": 43.15904903411865,
+      "ours_cascade": 37.269760847091675
+    },
+    "slot_ms_bq": {
+      "ours_BQ": 441899,
+      "ours_cascade": 101645,
+      "cascade_stage2": 98693
+    },
+    "cost_usd": {
+      "paper_BQ": 0.01,
+      "paper_DASE_NN": 5e-06,
+      "ours_BQ": 0.0020648000000000003,
+      "ours_cascade": 0.0009968000000000002
+    },
+    "n_llm_calls": {
+      "paper_BQ": 140,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 29,
+      "ours_cascade": 14
+    }
+  }
+}

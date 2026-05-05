@@ -1,0 +1,9 @@
+{
+  "fss": {
+    "sigma_low": 0.1,
+    "sigma_high": 0.80
+  },
+  "fss_pf": 1.5,
+  "ta_eps": 0.01,
+  "w4_FilterFirst_TA_threshold": 0.25
+}

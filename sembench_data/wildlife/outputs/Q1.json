@@ -1,0 +1,145 @@
+{
+  "scenario": "wildlife",
+  "query_id": 1,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Does this image contain a zebra?",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_prompts": {
+    "positive": [
+      "a photograph of a zebra",
+      "a wildlife camera trap image showing a zebra",
+      "an animal with black and white stripes, a zebra"
+    ],
+    "negative": [
+      "a photograph that does not contain a zebra",
+      "a wildlife camera trap image of an animal that is not a zebra",
+      "an animal scene with no zebra in it"
+    ]
+  },
+  "cascade_form": "Option E (staging table animals_dataset.q1_uncertain_mm). dase = caption_emb (Gemini Flash caption + gemini-embedding-001) cosine sim to anchor prompts. alpha-band by |margin|; uncertain rows go to BQ AI.IF on multimodal image ref",
+  "data": {
+    "n_images": 200,
+    "n_gt_zebra": 11
+  },
+  "dase_breakdown": {
+    "data_load_s": 0.005898714065551758,
+    "embed_prompts_s": 1.2295002937316895,
+    "margin_compute_s": 0.007040977478027344,
+    "partition_s": 0.0011551380157470703,
+    "total_s": 1.2435951232910156
+  },
+  "dase_partition": {
+    "n_uncertain": 40,
+    "n_confident_pos": 0,
+    "uncertain_count_dase_pos": 8
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL multimodal (image, prompt) + thinking_budget=0",
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 9080,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0027865,
+    "per_row_cost_usd": 0.0005572999999999999,
+    "elapsed_s": 4.588955640792847
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q1.sql verbatim on image_data_mm",
+    "sql": "\n    SELECT COUNT(*) AS count\n    FROM animals_dataset.image_data_mm\n    WHERE AI.IF(\n      ('Does this image contain a zebra?', image),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n",
+    "result_count": 8,
+    "score": {
+      "relative_error": 0.2727272727272727,
+      "score": 0.7857142857142857
+    },
+    "latency_breakdown": {
+      "wall_s": 5.196531534194946,
+      "slot_ms": 31083
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 200,
+      "n_llm_calls_method": "scope size",
+      "per_row_cost_usd": 0.0005572999999999999,
+      "total_cost_usd": 0.11145999999999999
+    }
+  },
+  "cascade": {
+    "method": "Option E: dase confident classify + BQ AI.IF on uncertain via staging",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE animals_dataset.q1_uncertain_mm AS\n    SELECT m.Species, m.City, m.StationID, ot.ref AS image\n    FROM animals_dataset.image_data_images m\n    JOIN animals_dataset.image_data_external ot\n      ON ot.uri = m.ImagePath\n    WHERE m.ImagePath IN UNNEST(@uris)\n",
+      "latency_breakdown": {
+        "wall_s": 2.476024627685547,
+        "slot_ms": 7759
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT COUNT(*) AS count\n    FROM animals_dataset.q1_uncertain_mm\n    WHERE AI.IF(\n      ('Does this image contain a zebra?', image),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    )\n",
+      "result_bq_pos_on_uncertain": 8,
+      "latency_breakdown": {
+        "wall_s": 300.360716342926,
+        "slot_ms": 658505
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 40,
+        "n_llm_calls_method": "n_uncertain",
+        "per_row_cost_usd": 0.0005572999999999999,
+        "total_cost_usd": 0.022292
+      }
+    },
+    "cascade_count": 8,
+    "cascade_count_breakdown": {
+      "dase_confident_pos": 0,
+      "bq_uncertain_pos": 8
+    },
+    "score": {
+      "relative_error": 0.2727272727272727,
+      "score": 0.7857142857142857
+    },
+    "totals": {
+      "wall_s": 304.0803360939026,
+      "wall_breakdown_s": {
+        "dase": 1.2435951232910156,
+        "bq_stage1_ctas": 2.476024627685547,
+        "bq_stage2": 300.360716342926
+      },
+      "slot_ms_bq_total": 666264,
+      "cost_usd": 0.022292,
+      "n_llm_calls": 40
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper": 0.79,
+      "baseline": 0.7857142857142857,
+      "cascade": 0.7857142857142857,
+      "_baseline_source": "ours"
+    },
+    "wall_s": {
+      "paper": 32.0,
+      "baseline": 5.196531534194946,
+      "cascade_total": 304.0803360939026,
+      "cascade_bq_stage2": 300.360716342926
+    },
+    "slot_ms_bq": {
+      "baseline": 31083,
+      "cascade_total": 666264,
+      "cascade_stage2": 658505
+    },
+    "cost_usd": {
+      "paper": 0.11,
+      "baseline": 0.11145999999999999,
+      "cascade": 0.022292
+    },
+    "n_llm_calls": {
+      "baseline": 200,
+      "cascade": 40
+    }
+  }
+}

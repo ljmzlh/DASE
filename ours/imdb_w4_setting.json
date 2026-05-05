@@ -1,0 +1,10 @@
+{
+  "fss": {
+    "sigma_low": 0.30,
+    "sigma_high": 0.50
+  },
+  "fss_pf": 1.5,
+  "ta_eps": 0.005,
+  "_w4_FilterFirst_TA_hint": "命中行占全表比例σ若<=该数则走FilterFirst；0≈总走TA(仅σ=0走FilterFirst空集)；1≈在σ<=1时总走FilterFirst。",
+  "w4_FilterFirst_TA_threshold": 0.6
+}

@@ -1,0 +1,250 @@
+{
+  "scenario": "cars",
+  "query_id": 3,
+  "operator": "F+L",
+  "scale_factor": 19672,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "You are given an image of a vehicle or its parts. Return true if car is not damaged",
+  "structural_filter": "p.transmission = 'Manual'",
+  "params": {
+    "K_candidates": 20,
+    "target": 10
+  },
+  "dase_prompts": {
+    "positive": [
+      "an undamaged car in pristine condition",
+      "a clean intact vehicle without dents or scratches",
+      "a car in good condition with no visible damage"
+    ],
+    "negative": [
+      "a damaged or wrecked car with visible damage",
+      "a car with dents, scratches, or broken parts",
+      "a vehicle showing signs of accident damage"
+    ]
+  },
+  "cascade_form": "F+L canonical (top-K by margin \u2192 BQ AI.IF on IN(K) + LIMIT TARGET); K=20, TARGET=10; BQ short-circuits at LIMIT",
+  "data": {
+    "n_cars_total": 19672,
+    "n_images_total": 3765,
+    "n_manual_cars": 6541,
+    "n_rows_in_scope": 1270,
+    "n_gt_positive_vins": 670
+  },
+  "dase_breakdown_s": {
+    "data_load": 0.44172191619873047,
+    "embed_prompts": 1.2450077533721924,
+    "margin_compute": 0.06033682823181152,
+    "rank_topk_or_partition": 0.0014536380767822266,
+    "total": 1.7485201358795166
+  },
+  "dase_top_K": {
+    "image_ids": [
+      13553,
+      113,
+      14616,
+      7097,
+      13797,
+      5681,
+      6717,
+      4327,
+      7273,
+      5237,
+      390,
+      944,
+      7020,
+      9293,
+      7947,
+      5691,
+      15687,
+      3300,
+      5725,
+      14201
+    ],
+    "vins": [
+      "RLFGLFP3MMYU8BUKE",
+      "4KJBKKJ8Y9U2LFGE8",
+      "1XF15ZL2M45HULYBN",
+      "7L9MX4H0DD2H31D06",
+      "6YZYRRLCVXHVLWLD1",
+      "3PE108T7SU229STNS",
+      "FDKT1S2VT22S59XUE",
+      "N8J1V1UE51G3468CW",
+      "13U7SAP6BZUYVUVU3",
+      "12V6WYH7AXCDVCKYK",
+      "46KX0KG2TU8TRUF7B",
+      "2WTEB6WKB9VELM958",
+      "88WW0P9Y0KSRG41XP",
+      "BUL8SNZEU5A7PYG0L",
+      "K0EUUNJPHN35LZ64R",
+      "NNFPEFB2KSFWBP1AX",
+      "2XR8WJXG3VS3WR0UG",
+      "MUF44KC2LD99XAKU3",
+      "22ECGKXUP0S0HAFUH",
+      "7GVCZA1R3A614ET7T"
+    ],
+    "margins": [
+      0.06725084781646729,
+      0.06457817554473877,
+      0.06409138441085815,
+      0.06080222129821777,
+      0.06042081117630005,
+      0.05719715356826782,
+      0.056401610374450684,
+      0.05572730302810669,
+      0.054846227169036865,
+      0.05393338203430176,
+      0.05363655090332031,
+      0.05278581380844116,
+      0.0521053671836853,
+      0.05073732137680054,
+      0.05060917139053345,
+      0.050440430641174316,
+      0.05023413896560669,
+      0.050092458724975586,
+      0.04833918809890747,
+      0.048142075538635254
+    ],
+    "n_top_K_in_GT": 20
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL multimodal (image ref, Q3 prompt) + thinking_budget=0",
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 3469,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0011032,
+    "per_row_cost_usd": 0.00022063999999999997,
+    "elapsed_s": 7.041109323501587
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q3.sql verbatim on cars \u2a1d car_mm (Manual + LIMIT 10)",
+    "sql": "SELECT p.vin\nFROM cars_dataset.cars AS p\nJOIN cars_dataset.car_mm AS x ON p.car_id = x.car_id\nWHERE p.transmission = \"Manual\"\n  AND AI.IF(\n    ('You are given an image of a vehicle or its parts. Return true if car is not damaged.', x.image),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )\nLIMIT 10",
+    "result_vins": [
+      "G7BZRCY840G2L7G6J",
+      "H0B8GBL1ZBMANKTMS",
+      "15ELNVJYGP8RDG1KU",
+      "8HP8XJSJKBGJ02DNM",
+      "6SXUNE2S4NB6N4L1W",
+      "2PA5AD43PD35TPC2M",
+      "4P6AEXJK2JBW0PVCY",
+      "D10B5RUXS694XSUCM",
+      "PMJXHG8EUFUNF00CS",
+      "ZR9ZWWC2Y8UTXA98E"
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 16.582885265350342,
+      "slot_ms": 172073
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 69,
+      "n_llm_calls_method": "max(round(slot_ms/2500), |returned|), capped at scope",
+      "per_row_cost_usd": 0.00022063999999999997,
+      "total_cost_usd": 0.015224159999999999
+    }
+  },
+  "cascade": {
+    "method": "F+L canonical: dase margin top-20 by image caption emb \u2192 single BQ AI.IF on image_id IN(20) + LIMIT 10",
+    "stage1_ctas": {
+      "latency_breakdown": {
+        "wall_s": 0.0,
+        "slot_ms": 0
+      },
+      "cost_usd": 0.0,
+      "_note": "no staging; IN-list passed directly"
+    },
+    "stage2_run": {
+      "sql": "\n    SELECT p.vin\n    FROM cars_dataset.cars AS p\n    JOIN cars_dataset.car_mm AS x ON p.car_id = x.car_id\n    WHERE p.transmission = \"Manual\"\n      AND x.image_id IN UNNEST(@ids)\n      AND AI.IF(\n        ('You are given an image of a vehicle or its parts. Return true if car is not damaged.', x.image),\n        connection_id => 'us.connection',\n        endpoint => 'gemini-2.5-flash'\n      )\n    LIMIT 10\n",
+      "result_vins": [
+        "N8J1V1UE51G3468CW",
+        "2XR8WJXG3VS3WR0UG",
+        "BUL8SNZEU5A7PYG0L",
+        "RLFGLFP3MMYU8BUKE",
+        "2WTEB6WKB9VELM958",
+        "1XF15ZL2M45HULYBN",
+        "FDKT1S2VT22S59XUE",
+        "4KJBKKJ8Y9U2LFGE8",
+        "22ECGKXUP0S0HAFUH",
+        "NNFPEFB2KSFWBP1AX"
+      ],
+      "latency_breakdown": {
+        "wall_s": 4.485824346542358,
+        "slot_ms": 20312
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 10,
+        "n_llm_calls_method": "max(round(slot/2500), |returned|), capped K",
+        "per_row_cost_usd": 0.00022063999999999997,
+        "total_cost_usd": 0.0022064
+      }
+    },
+    "result_vins": [
+      "N8J1V1UE51G3468CW",
+      "2XR8WJXG3VS3WR0UG",
+      "BUL8SNZEU5A7PYG0L",
+      "RLFGLFP3MMYU8BUKE",
+      "2WTEB6WKB9VELM958",
+      "1XF15ZL2M45HULYBN",
+      "FDKT1S2VT22S59XUE",
+      "4KJBKKJ8Y9U2LFGE8",
+      "22ECGKXUP0S0HAFUH",
+      "NNFPEFB2KSFWBP1AX"
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "totals": {
+      "wall_s": 6.234344482421875,
+      "wall_breakdown_s": {
+        "dase": 1.7485201358795166,
+        "bq_stage1_ctas": 0.0,
+        "bq_stage2_aiif": 4.485824346542358
+      },
+      "slot_ms_bq_total": 20312,
+      "cost_usd": 0.0022064,
+      "n_llm_calls": 10
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 1.0,
+      "paper_DASE_NN": 1.0,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0,
+      "_baseline_source": "ours"
+    },
+    "wall_s": {
+      "paper_BQ": 36.4,
+      "paper_DASE_NN": 0.7,
+      "ours_BQ": 16.582885265350342,
+      "ours_cascade": 6.234344482421875
+    },
+    "slot_ms_bq": {
+      "ours_BQ": 172073,
+      "ours_cascade": 20312,
+      "cascade_stage2": 20312
+    },
+    "cost_usd": {
+      "paper_BQ": 1.66,
+      "paper_DASE_NN": 5e-06,
+      "ours_BQ": 0.015224159999999999,
+      "ours_cascade": 0.0022064
+    },
+    "n_llm_calls": {
+      "paper_BQ": 7524,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 69,
+      "ours_cascade": 10
+    }
+  }
+}

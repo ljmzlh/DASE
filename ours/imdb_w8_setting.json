@@ -1,0 +1,6 @@
+{
+  "eps": 0.01,
+  "time_budget": 30.0,
+  "ti_chunk_step": 0.05,
+  "evt_threshold": 10000.0
+}

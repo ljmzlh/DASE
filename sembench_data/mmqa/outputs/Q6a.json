@@ -1,0 +1,115 @@
+{
+  "scenario": "mmqa",
+  "query_id": "6a",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "operator": "sem-filter",
+  "cascade_strategy": "confidence-based skip",
+  "params": {
+    "MARGIN_HI": 0.014,
+    "MARGIN_LO": -0.005
+  },
+  "dase_prompts": {
+    "positive": [
+      "The airline's destination list includes Frankfurt or Frankfurt Airport",
+      "At least one listed destination is the city of Frankfurt in Germany",
+      "These destinations mention Frankfurt as a served city or airport"
+    ],
+    "negative": [
+      "Frankfurt is not among these destinations and is not mentioned",
+      "The destination text lists only cities other than Frankfurt",
+      "None of the named places is Frankfurt or Frankfurt Airport"
+    ]
+  },
+  "data": {
+    "n_rows": 200,
+    "n_gt": 1,
+    "gt_airlines": [
+      "Discover Airlines"
+    ]
+  },
+  "dase_partition": {
+    "n_confident_pos": 1,
+    "n_uncertain": 128,
+    "n_confident_neg": 71,
+    "confident_pos_airlines": [
+      "Discover Airlines"
+    ]
+  },
+  "calibration": {
+    "n_sample": 5,
+    "sample_cost_usd": 0.0001297,
+    "per_row_cost_usd": 2.5940000000000002e-05,
+    "elapsed_s": 5.70139741897583
+  },
+  "cascade": {
+    "method": "dase confident_pos union BQ-verified uncertain",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE mmqa.q6a_uncertain AS\n    SELECT Airlines, Destinations\n    FROM UNNEST(@airlines) AS Airlines WITH OFFSET pos\n    JOIN UNNEST(@dests) AS Destinations WITH OFFSET pos2 ON pos = pos2\n",
+    "stage1_wall_s": 1.7610766887664795,
+    "stage1_slot_ms": 2551,
+    "stage2_sql": "SELECT Airlines FROM mmqa.q6a_uncertain\n    WHERE AI.IF(\"Given destinations '\" || Destinations || \"' of \" || Airlines || \", the airline has flights to Frankfurt.\",\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "stage2_wall_s": 299.2958679199219,
+    "stage2_slot_ms": 653933,
+    "result_airlines": [
+      "Discover Airlines"
+    ],
+    "score": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "totals": {
+      "wall_s": 301.05694460868835,
+      "slot_ms_bq_total": 656484,
+      "cost_usd": 0.0033203200000000003,
+      "n_llm_calls": 128
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.03,
+      "paper_DASE_NN": 0.04,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 18.9,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 300.5770094394684,
+      "ours_cascade": 15.845999999999998
+    },
+    "cost_usd": {
+      "paper_BQ": 0.004,
+      "paper_DASE_NN": 0.0002,
+      "ours_BQ": 0.005188000000000001,
+      "ours_cascade": 0.00256
+    },
+    "n_llm_calls": {
+      "paper_BQ": 200,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 200,
+      "ours_cascade": 128
+    }
+  },
+  "_ps_our_actual_bq": {
+    "method": "verbatim BQ q6a.sql",
+    "sql": "SELECT Airlines FROM mmqa.tampa_international_airport\n    WHERE AI.IF(\"Given destinations '\" || Destinations || \"' of \" || Airlines || \", the airline has flights to Frankfurt.\",\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "result_airlines": [
+      "Discover Airlines"
+    ],
+    "score": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 300.5770094394684,
+      "slot_ms": 690953
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 200,
+      "per_row_cost_usd": 2.5940000000000002e-05,
+      "total_cost_usd": 0.005188000000000001
+    }
+  }
+}

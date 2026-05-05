@@ -1,0 +1,160 @@
+{
+  "scenario": "wildlife",
+  "query_id": 5,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "image_prompt": "Does this image contain an elephant?",
+  "audio_prompt": "Does this audio contain an elephant sound?",
+  "params": {
+    "alpha": 0.2
+  },
+  "dase_image_prompts": {
+    "positive": [
+      "a photograph of an elephant",
+      "a wildlife camera trap image showing an elephant",
+      "an elephant captured in the photo"
+    ],
+    "negative": [
+      "a photograph that does not contain an elephant",
+      "a wildlife camera trap image of a non-elephant animal",
+      "an animal photo without any elephant"
+    ]
+  },
+  "dase_audio_prompts": {
+    "positive": [
+      "a sound recording of an elephant",
+      "audio of an elephant trumpeting or vocalizing",
+      "elephant call sound clip"
+    ],
+    "negative": [
+      "a sound recording of an animal that is not an elephant",
+      "audio of a non-elephant animal vocalization",
+      "animal sound clip without any elephant"
+    ]
+  },
+  "cascade_form": "Option E + dual-modality (image+audio uncertain) + client-side union of cities",
+  "data": {
+    "n_images": 200,
+    "n_audios": 66,
+    "gt_cities": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi"
+    ]
+  },
+  "dase_partition": {
+    "image_uncertain": 40,
+    "audio_uncertain": 13,
+    "image_confident_pos_cities": [],
+    "audio_confident_pos_cities": []
+  },
+  "calibration": {
+    "image": {
+      "n_sample": 5,
+      "tokens_total": {
+        "prompt_other": 9085,
+        "prompt_audio": 0,
+        "output": 25,
+        "thoughts": 0
+      },
+      "sample_cost_usd": 0.002788,
+      "per_row_cost_usd": 0.0005576,
+      "elapsed_s": 4.739318370819092
+    },
+    "audio": {
+      "n_sample": 5,
+      "tokens_total": {
+        "prompt_other": 60,
+        "prompt_audio": 900,
+        "output": 33,
+        "thoughts": 0
+      },
+      "sample_cost_usd": 0.0010005,
+      "per_row_cost_usd": 0.0002001,
+      "elapsed_s": 5.42450213432312
+    }
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q5.sql verbatim",
+    "sql": "\n    SELECT DISTINCT city FROM (\n      SELECT City AS city FROM animals_dataset.image_data_mm\n      WHERE AI.IF(('Does this image contain an elephant? ', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n      UNION ALL\n      SELECT City AS city FROM animals_dataset.audio_data_mm\n      WHERE AI.IF(('Does this audio contain an elephant sound? ', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n    )\n",
+    "result_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi"
+    ],
+    "score": {
+      "f1": 0.8571428571428571
+    },
+    "latency_breakdown": {
+      "wall_s": 301.1757662296295,
+      "slot_ms": 461114
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 266,
+      "img_per_row": 0.0005576,
+      "aud_per_row": 0.0002001,
+      "total_cost_usd": 0.12472659999999999
+    }
+  },
+  "cascade": {
+    "method": "Option E dual-modality + client-side city union",
+    "stage1_sqls": [
+      "\n    CREATE OR REPLACE TABLE animals_dataset.q5_image_uncertain_mm AS\n    SELECT m.Species, m.City, m.StationID, ot.ref AS image\n    FROM animals_dataset.image_data_images m\n    JOIN animals_dataset.image_data_external ot ON ot.uri = m.ImagePath\n    WHERE m.ImagePath IN UNNEST(@uris)\n",
+      "\n    CREATE OR REPLACE TABLE animals_dataset.q5_audio_uncertain_mm AS\n    SELECT m.Animal, m.City, m.StationID, ot.ref AS audio\n    FROM animals_dataset.audio_data_files m\n    JOIN animals_dataset.audio_data_external ot ON ot.uri = m.AudioPath\n    WHERE m.AudioPath IN UNNEST(@uris)\n"
+    ],
+    "stage1_wall_s": 4.99578070640564,
+    "stage1_slot_ms": 15927,
+    "stage2_sql": "\n    SELECT DISTINCT city FROM (\n      SELECT City AS city FROM animals_dataset.q5_image_uncertain_mm\n      WHERE AI.IF(('Does this image contain an elephant? ', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n      UNION ALL\n      SELECT City AS city FROM animals_dataset.q5_audio_uncertain_mm\n      WHERE AI.IF(('Does this audio contain an elephant sound? ', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n    )\n",
+    "bq_cities_on_uncertain": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "stage2_wall_s": 5.9061501026153564,
+    "stage2_slot_ms": 47724,
+    "cascade_cities": [
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "score": {
+      "f1": 0.8571428571428571
+    },
+    "totals": {
+      "wall_s": 10.901930809020996,
+      "slot_ms_bq_total": 63651,
+      "cost_usd": 0.024905300000000002,
+      "n_llm_calls": 53
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.75,
+      "paper_DASE_NN": 1.0,
+      "ours_BQ": 0.8571428571428571,
+      "ours_cascade": 0.8571428571428571
+    },
+    "wall_s": {
+      "paper_BQ": 19.2,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 301.1757662296295,
+      "ours_cascade": 10.901930809020996
+    },
+    "cost_usd": {
+      "paper_BQ": 0.12,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.12472659999999999,
+      "ours_cascade": 0.024905300000000002
+    },
+    "n_llm_calls": {
+      "paper_BQ": 317,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 266,
+      "ours_cascade": 53
+    }
+  }
+}

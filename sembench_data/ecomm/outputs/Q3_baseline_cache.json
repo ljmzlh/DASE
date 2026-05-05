@@ -1,0 +1,8 @@
+{
+  "_note": "Cached from K=300 KMeans baseline run. Delete this file to force fresh BQ",
+  "wall_s": 301.2,
+  "slot_ms": 1817069,
+  "ari": 0.9394,
+  "n_calls": 500,
+  "bres": {}
+}

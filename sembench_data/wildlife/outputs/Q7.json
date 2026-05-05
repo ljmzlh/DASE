@@ -1,0 +1,178 @@
+{
+  "scenario": "wildlife",
+  "query_id": 7,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "zebra_prompt": "Does this image contain a zebra?",
+  "impala_prompt": "Does this image contain an impala?",
+  "params": {
+    "alpha": 0.5
+  },
+  "dase_zebra_prompts": {
+    "positive": [
+      "a photograph of a zebra",
+      "a wildlife camera trap image showing a zebra",
+      "an animal with black and white stripes, a zebra"
+    ],
+    "negative": [
+      "a photograph that does not contain a zebra",
+      "a wildlife camera trap image of an animal that is not a zebra",
+      "an animal scene with no zebra in it"
+    ]
+  },
+  "dase_impala_prompts": {
+    "positive": [
+      "a photograph of an impala",
+      "a wildlife camera trap image showing an impala antelope",
+      "an impala animal in the picture"
+    ],
+    "negative": [
+      "a photograph that does not contain an impala",
+      "a wildlife camera trap image of a non-impala animal",
+      "an animal scene without any impala"
+    ]
+  },
+  "cascade_form": "Option E + two-prompt cascade + client-side intersect. Stage 2 is two separate AI.IF DISTINCT-City queries on a single staging table whose rows are the union of zebra-uncertain \u222a impala-uncertain image rows",
+  "data": {
+    "n_images": 200,
+    "gt_zebra": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "gt_impala": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "gt_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ]
+  },
+  "dase_partition": {
+    "n_uncertain_zebra": 100,
+    "n_uncertain_impala": 100,
+    "n_union_uncertain": 130,
+    "dase_zebra_confident_cities": [],
+    "dase_impala_confident_cities": []
+  },
+  "calibration": {
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 9080,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0027865,
+    "per_row_cost_usd": 0.0005572999999999999,
+    "elapsed_s": 10.391711235046387
+  },
+  "baseline": {
+    "_status": "aborted",
+    "score": {
+      "score": 1.0,
+      "_source": "paper"
+    },
+    "latency_breakdown": {
+      "wall_s": 24.6,
+      "_source": "paper"
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 395,
+      "total_cost_usd": 0.22,
+      "_source": "paper"
+    }
+  },
+  "cascade": {
+    "method": "Option E dual-prompt + client-side intersect",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE animals_dataset.q7_uncertain_mm AS\n    SELECT m.Species, m.City, m.StationID, ot.ref AS image\n    FROM animals_dataset.image_data_images m\n    JOIN animals_dataset.image_data_external ot ON ot.uri = m.ImagePath\n    WHERE m.ImagePath IN UNNEST(@uris)\n",
+    "stage1_wall_s": 2.611642599105835,
+    "stage1_slot_ms": 9160,
+    "stage2_sqls": [
+      "\n    SELECT DISTINCT City FROM animals_dataset.q7_uncertain_mm\n    WHERE AI.IF(('Does this image contain a zebra?', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+      "\n    SELECT DISTINCT City FROM animals_dataset.q7_uncertain_mm\n    WHERE AI.IF(('Does this image contain an impala?', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n"
+    ],
+    "bq_zebra_cities_on_uncertain": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "bq_impala_cities_on_uncertain": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "stage2_wall_s": 1195.4961774349213,
+    "stage2_slot_ms": 5231471,
+    "zebra_cities_combined": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "impala_cities_combined": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "cascade_cities": [
+      "Eldoret",
+      "Kisumu",
+      "Mombasa",
+      "Nairobi",
+      "Nakuru"
+    ],
+    "score": {
+      "f1": 1.0
+    },
+    "totals": {
+      "wall_s": 1198.107820034027,
+      "slot_ms_bq_total": 5240631,
+      "cost_usd": 0.14489799999999997,
+      "n_llm_calls": 260
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 1.0,
+      "paper_DASE_NN": 0.0,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 24.6,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 24.6,
+      "ours_cascade": 1198.107820034027
+    },
+    "cost_usd": {
+      "paper_BQ": 0.22,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.22,
+      "ours_cascade": 0.14489799999999997
+    },
+    "n_llm_calls": {
+      "paper_BQ": 395,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 395,
+      "ours_cascade": 260
+    }
+  }
+}

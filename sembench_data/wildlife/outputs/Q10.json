@@ -1,0 +1,157 @@
+{
+  "scenario": "wildlife",
+  "query_id": 10,
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Does this image contain a zebra?",
+  "params": {
+    "alpha": 0.5
+  },
+  "dase_prompts": {
+    "positive": [
+      "a photograph of a zebra",
+      "a wildlife camera trap image showing a zebra",
+      "an animal with black and white stripes, a zebra"
+    ],
+    "negative": [
+      "a photograph that does not contain a zebra",
+      "a wildlife camera trap image of an animal that is not a zebra",
+      "an animal scene with no zebra in it"
+    ]
+  },
+  "cascade_form": "Option E + image-only + client-side GROUP BY argmax. Stage 2 returns verified zebra rows (City, StationID) without GROUP BY, NOT a verbatim swap of Q10.sql, because the verbatim form's GROUP BY+LIMIT 1 over a staging table containing only uncertain rows would miss dase-confident zebra rows and flip the argmax",
+  "data": {
+    "n_images": 200,
+    "n_gt_zebra_rows": 11,
+    "gt_max_count": 2,
+    "gt_tied_top": [
+      [
+        "Eldoret",
+        "Station_A"
+      ],
+      [
+        "Kisumu",
+        "Station_A"
+      ]
+    ]
+  },
+  "dase_partition": {
+    "n_uncertain": 100,
+    "n_dase_confident_pos": 0
+  },
+  "calibration": {
+    "n_sample": 5,
+    "tokens_total": {
+      "prompt_other": 9080,
+      "prompt_audio": 0,
+      "output": 25,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0027865,
+    "per_row_cost_usd": 0.0005572999999999999,
+    "elapsed_s": 52.302671909332275
+  },
+  "baseline": {
+    "method": "sembench bigquery/Q10.sql verbatim",
+    "sql": "\n    SELECT City AS city, StationID AS stationID\n    FROM animals_dataset.image_data_mm\n    WHERE AI.IF(('Does this image contain a zebra?', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n    GROUP BY City, StationID\n    ORDER BY COUNT(*) DESC\n    LIMIT 1\n",
+    "result": [
+      [
+        "Nakuru",
+        "Station_D"
+      ]
+    ],
+    "score": {
+      "f1": 0.0
+    },
+    "latency_breakdown": {
+      "wall_s": 333.53977513313293,
+      "slot_ms": 1386605
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 200,
+      "per_row_cost_usd": 0.0005572999999999999,
+      "total_cost_usd": 0.11145999999999999
+    }
+  },
+  "cascade": {
+    "method": "Option E image-only + client-side GROUP BY argmax",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE animals_dataset.q10_uncertain_mm AS\n    SELECT m.Species, m.City, m.StationID, ot.uri AS uri, ot.ref AS image\n    FROM animals_dataset.image_data_images m\n    JOIN animals_dataset.image_data_external ot ON ot.uri = m.ImagePath\n    WHERE m.ImagePath IN UNNEST(@uris)\n",
+    "stage1_wall_s": 2.312145233154297,
+    "stage1_slot_ms": 7633,
+    "stage2_sql": "\n    SELECT City, StationID, uri\n    FROM animals_dataset.q10_uncertain_mm\n    WHERE AI.IF(('Does this image contain a zebra?', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')\n",
+    "n_dase_pos_rows": 0,
+    "n_bq_verified_rows": 8,
+    "stage2_wall_s": 322.21469616889954,
+    "stage2_slot_ms": 1279712,
+    "cascade_pred_top": [
+      [
+        "Eldoret",
+        "Station_A"
+      ],
+      [
+        "Kisumu",
+        "Station_A"
+      ],
+      [
+        "Kisumu",
+        "Station_B"
+      ],
+      [
+        "Mombasa",
+        "Station_B"
+      ],
+      [
+        "Mombasa",
+        "Station_C"
+      ],
+      [
+        "Nairobi",
+        "Station_A"
+      ],
+      [
+        "Nairobi",
+        "Station_B"
+      ],
+      [
+        "Nakuru",
+        "Station_D"
+      ]
+    ],
+    "score": {
+      "f1": 0.25
+    },
+    "totals": {
+      "wall_s": 324.52684140205383,
+      "slot_ms_bq_total": 1287345,
+      "cost_usd": 0.055729999999999995,
+      "n_llm_calls": 100
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.0,
+      "paper_DASE_NN": 1.0,
+      "ours_BQ": 0.0,
+      "ours_cascade": 0.25
+    },
+    "wall_s": {
+      "paper_BQ": 40.3,
+      "paper_DASE_NN": 0.0008,
+      "ours_BQ": 333.53977513313293,
+      "ours_cascade": 324.52684140205383
+    },
+    "cost_usd": {
+      "paper_BQ": 0.11,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 0.11145999999999999,
+      "ours_cascade": 0.055729999999999995
+    },
+    "n_llm_calls": {
+      "paper_BQ": 197,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 200,
+      "ours_cascade": 100
+    }
+  }
+}

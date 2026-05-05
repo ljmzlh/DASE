@@ -1,0 +1,67 @@
+{
+    "imdb": {
+        "db": "imdb",
+        "table_left": "imdb_t1",
+        "table_right": "imdb_t2",
+        "id_col": "id",
+        "vec_col": "actor_director_emb",
+        "ef_search": 40,
+        "cols_left": ["id", "genre", "rating", "year"],
+        "cols_right": ["id", "genre", "rating", "year"]
+    },
+    "w4": {
+        "db": "molecule",
+        "table_left": "w4_corpus",
+        "table_right": "w4_corpus",
+        "id_col": "id",
+        "vec_col": "\"author_name_qwen3-0.6B_1024\"",
+        "ef_search": 40,
+        "cols_left": ["id", "field"],
+        "cols_right": ["id", "field"]
+    },
+    "w5_molecule_0.5": {
+        "db": "molecule",
+        "table_left": "facts_50k",
+        "table_right": "paper",
+        "id_col_left": "fact_id",
+        "id_col_right": "id",
+        "vec_col_left": "fact_text_emb",
+        "vec_col_right": "abstract_emb",
+        "ef_search": 40,
+        "cols_left": ["fact_id", "mol_id", "fact_type", "evidence_type", "claim_polarity", "organism",
+                      "mol_moa", "mol_target_type", "mol_source_origin", "mol_toxicity_flag",
+                      "mol_mw", "mol_logp", "mol_tpsa", "mol_num_atoms", "mol_num_rings",
+                      "mol_num_hbd", "mol_num_hba", "mol_therapeutic_area"],
+        "cols_right": ["id", "pmid", "journal", "year", "pub_type", "mesh_terms"]
+    },
+    "w5_molecule_0.6": {
+        "db": "molecule",
+        "table_left": "facts_50k",
+        "table_right": "paper",
+        "id_col_left": "fact_id",
+        "id_col_right": "id",
+        "vec_col_left": "fact_text_emb",
+        "vec_col_right": "abstract_emb",
+        "ef_search": 100,
+        "cols_left": ["fact_id", "mol_id", "fact_type", "evidence_type", "claim_polarity", "organism",
+                      "mol_moa", "mol_target_type", "mol_source_origin", "mol_toxicity_flag",
+                      "mol_mw", "mol_logp", "mol_tpsa", "mol_num_atoms", "mol_num_rings",
+                      "mol_num_hbd", "mol_num_hba", "mol_therapeutic_area"],
+        "cols_right": ["id", "pmid", "journal", "year", "pub_type", "mesh_terms"]
+    },
+    "w5_molecule_0.7": {
+        "db": "molecule",
+        "table_left": "facts_50k",
+        "table_right": "paper",
+        "id_col_left": "fact_id",
+        "id_col_right": "id",
+        "vec_col_left": "fact_text_emb",
+        "vec_col_right": "abstract_emb",
+        "ef_search": 200,
+        "cols_left": ["fact_id", "mol_id", "fact_type", "evidence_type", "claim_polarity", "organism",
+                      "mol_moa", "mol_target_type", "mol_source_origin", "mol_toxicity_flag",
+                      "mol_mw", "mol_logp", "mol_tpsa", "mol_num_atoms", "mol_num_rings",
+                      "mol_num_hbd", "mol_num_hba", "mol_therapeutic_area"],
+        "cols_right": ["id", "pmid", "journal", "year", "pub_type", "mesh_terms"]
+    }
+}

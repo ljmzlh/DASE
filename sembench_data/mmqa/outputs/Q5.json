@@ -1,0 +1,32 @@
+{
+  "scenario": "mmqa",
+  "query_id": "5",
+  "_status": "X-row: paper Table 4(d) shows X X X for BQ; entity-intersection op not expressible as single AI.IF/AI.GENERATE",
+  "_paper_source": "MMQA",
+  "comparison": {
+    "score": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": null
+    },
+    "wall_s": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": null
+    },
+    "cost_usd": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": null
+    },
+    "n_llm_calls": {
+      "paper_BQ": null,
+      "paper_DASE_NN": null,
+      "ours_BQ": null,
+      "ours_cascade": null
+    }
+  }
+}

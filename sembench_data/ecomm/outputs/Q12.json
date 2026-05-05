@@ -1,0 +1,143 @@
+{
+  "scenario": "ecomm",
+  "query_id": 12,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "tau_distance_cosine": 0.05,
+    "rep_strategy": "centroid-nearest"
+  },
+  "cascade_form": "sem_filter + sem_map cluster-and-propagate: AgglomerativeClustering(image-cap emb, cosine, complete, distance_threshold=0.05) on 477 in-scope products; BQ template verbatim on rep ids; per-cluster: rep filter+JSON \u2192 propagate (brand, category) to all members, each gets own id",
+  "dase_breakdown": {
+    "data_load_cluster_s": 0.27399301528930664
+  },
+  "dase_partition": {
+    "tau_distance": 0.05,
+    "K_clusters_actual": 452,
+    "cluster_size_min": 1,
+    "cluster_size_max": 3,
+    "n_singletons": 430
+  },
+  "data": {
+    "n_products_in_scope": 477,
+    "scope_filter": "masterCategory IN ['Accessories', 'Apparel', 'Footwear']",
+    "n_gt_jsons": 58
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL proxy: filter rate + generate rate (sum)",
+    "filter_per_row_usd": 5.712e-05,
+    "generate_per_row_usd": 0.0010019999999999999,
+    "per_row_cost_usd": 0.0010591199999999998,
+    "filter_calibration": {
+      "label": "filter (text-only AI.IF proxy)",
+      "n": 10,
+      "elapsed_s": 7.147371530532837,
+      "cost_usd": 0.0005712,
+      "tokens": {
+        "prompt_other": 1454,
+        "prompt_audio": 0,
+        "output": 54,
+        "thoughts": 0
+      }
+    },
+    "generate_calibration": {
+      "label": "generate (image+text AI.GENERATE proxy)",
+      "n": 10,
+      "elapsed_s": 5.382281064987183,
+      "cost_usd": 0.01002,
+      "tokens": {
+        "prompt_other": 32950,
+        "prompt_audio": 0,
+        "output": 54,
+        "thoughts": 0
+      }
+    }
+  },
+  "baseline": {
+    "method": "sembench bigquery/q12.sql verbatim on STYLES_DETAILS",
+    "sql": "SELECT\n  AI.GENERATE(\n    ('''\n    You are given a product description and an image of the product as well as the product id.\n    The product contains a fashion item (clothing, shoes, accessories, etc).\n    There might be multiple fashion items in the image, especially when a model is presenting them.\n    If this is the case, focus only on the primary fashion item and use the description to determine which item in the image is of interest.\n\n    For each product, generate the following JSON:\n    ```\n    {\n        \"id\": <product id> (integer),\n        \"brand\": <extract the brand name from the description and/or image. use lower-case letters for the brand name>\",\n        \"category\": <classify the images into ''accessories'', ''apparel'', ''footwear''>\n    }\n    ```\n\n    Output the json in a single line.\n    Keep the order of the keys in the JSON as given in the description.\n    Do not use spaces between { or keys and values in the JSON, i.e., do no use spaces anywhere in the JSON structure.\n    Use normal quotes in the JSON; do not use single quotes.\n\n    The id, description and the image are as follows:\n    ''',\n     CAST(styles_details.id AS STRING), ' ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value, ' ',\n     images.ref),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  ).result AS id\nFROM fashion_product_images.STYLES_DETAILS AS styles_details\nJOIN fashion_product_images.IMAGE_MAPPING AS image_mapping\n  ON image_mapping.link = styles_details.styleImages.default.imageURL\nJOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\n  ON ARRAY_LAST(SPLIT(images.uri, '/')) = image_mapping.filename\nWHERE true\n  AND styles_details.masterCategory.typeName in ('Accessories', 'Apparel', 'Footwear')\n  AND AI.IF(\n    ('Does the following description describe a product from either Adidas or Puma?',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "score": {
+      "precision": 0.9206349206349206,
+      "recall": 1.0,
+      "f1_score": 0.9586776859504132
+    },
+    "latency_breakdown": {
+      "wall_s": 307.27350211143494,
+      "slot_ms": 414091
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 540,
+      "n_llm_calls_method": "n_in_scope (filter + generate per row, but generate only fires when filter pass)",
+      "per_row_cost_usd": 0.0010591199999999998,
+      "total_cost_usd": 0.09037223999999999
+    }
+  },
+  "cascade": {
+    "method": "Cluster + propagate sem_map: AgglomerativeClustering on image-cap emb \u2192 centroid-nearest reps \u2192 BQ q12 SQL on reps \u2192 for each rep (if filter pass) parse JSON's (brand, category) \u2192 propagate to all cluster members with their own id",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE fashion_product_images.q12_reps AS\n    SELECT * FROM fashion_product_images.STYLES_DETAILS\n    WHERE id IN (38595,33343,18217,2045,59081,44274,13747,4800,7730,43242,36919,18622,15057,5945,11920,19561,6269,6453,54805,9082,5576,36888,18345,9938,8419,59872,2607,6852,6403,57945,9012,8103,56211,6100,5912,54188,59783,45164,44225,47632,8402,47293,54130,5257,49939,9252,14082,9376,6071,54696,7935,58235,55651,59746,9596,58743,58263,4724,44741,5670,50621,6271,43913,48897,38993,53565,40142,54547,59019,5317,18041,36378,41825,56248,51162,36393,14901,36385,38943,25828,34106,4616,57064,44871,3869,51101,4543,38423,48509,4437,32845,35100,59656,14972,43047,44697,5314,26894,59356,53048,53414,51366,53412,50544,57087,15754,53126,53390,5273,8750,53842,29007,15841,53840,28209,14576,42200,14538,53679,54731,53554,26380,39375,53804,28635,33295,3351,30292,39129,28977,21323,43188,32824,26220,24292,37407,40525,38759,54142,3462,25447,17918,10607,34342,24663,25297,24869,34011,48177,50988,48503,28011,34571,41588,49054,18541,32937,15243,3656,3786,22575,4038,15091,44810,43794,19672,43543,46908,40035,39039,6310,37919,33758,26813,3470,14542,23480,47295,4771,36356,39297,25948,54170,36082,2058,33481,54698,59146,8783,1624,36563,50405,11719,38572,36519,9825,6506,42240,50324,27940,57944,3252,19096,19505,45404,10102,47525,34601,40270,27583,4859,13087,50177,16326,14925,21355,23250,34035,26649,5709,59435,49931,13075,5303,33916,54827,2479,19909,15267,6372,3640,48619,58922,50187,23165,58942,27280,4728,52504,20466,15255,12799,17452,53577,14953,11327,28538,47076,50957,25886,18437,10689,25209,19004,32138,41694,21873,44989,25381,45906,41963,45331,20482,58255,19159,13705,6241,3442,22346,34073,40159,56875,21508,1891,2240,36532,2161,3312,45075,16834,8910,16198,7039,14560,12505,53737,48552,27517,53106,38222,18925,10757,1623,8441,19412,53667,47612,11233,46410,20788,47676,56293,43469,28298,11241,28570,12902,37302,34639,18551,46411,15783,29941,13557,14568,13112,14755,53911,22643,21863,20312,46337,47593,19302,27046,25252,49509,48900,3371,39521,20008,10092,33534,15964,23147,33124,25047,44560,7328,13645,17846,16971,2396,53264,32502,50019,56988,10110,9358,5300,34430,40012,16522,9022,4993,2762,36984,14019,28047,19197,35056,18560,24984,28932,50708,48675,22615,10448,22140,39080,46316,52128,16518,27952,52050,31283,28901,58060,23874,29531,48822,26426,21131,11303,25469,30060,5571,42535,26659,22501,5301,1563,3479,51396,15356,5821,39610,14476,25691,23905,28380,27407,34069,19661,19651,43795,7802,14478,19732,16785,17542,46104,9503,33631,10490,41976,28419,46154,34835,4811,45372,33351,54585,26053,26297,31562,36414,1920,32571,13131,28692,10037,18413,39856,10579,14735,24169,22598,26125,22822,5299,42732,1790,22082,15779,31550,13690,19663,40015,30747,19429,42907)\n",
+      "latency_breakdown": {
+        "wall_s": 2.548651933670044,
+        "slot_ms": 2903
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT\n  AI.GENERATE(\n    ('''\n    You are given a product description and an image of the product as well as the product id.\n    The product contains a fashion item (clothing, shoes, accessories, etc).\n    There might be multiple fashion items in the image, especially when a model is presenting them.\n    If this is the case, focus only on the primary fashion item and use the description to determine which item in the image is of interest.\n\n    For each product, generate the following JSON:\n    ```\n    {\n        \"id\": <product id> (integer),\n        \"brand\": <extract the brand name from the description and/or image. use lower-case letters for the brand name>\",\n        \"category\": <classify the images into ''accessories'', ''apparel'', ''footwear''>\n    }\n    ```\n\n    Output the json in a single line.\n    Keep the order of the keys in the JSON as given in the description.\n    Do not use spaces between { or keys and values in the JSON, i.e., do no use spaces anywhere in the JSON structure.\n    Use normal quotes in the JSON; do not use single quotes.\n\n    The id, description and the image are as follows:\n    ''',\n     CAST(styles_details.id AS STRING), ' ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value, ' ',\n     images.ref),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  ).result AS id,\n  styles_details.id AS rep_id\nFROM fashion_product_images.q12_reps AS styles_details\nJOIN fashion_product_images.IMAGE_MAPPING AS image_mapping\n  ON image_mapping.link = styles_details.styleImages.default.imageURL\nJOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\n  ON ARRAY_LAST(SPLIT(images.uri, '/')) = image_mapping.filename\nWHERE true\n  AND styles_details.masterCategory.typeName in ('Accessories', 'Apparel', 'Footwear')\n  AND AI.IF(\n    ('Does the following description describe a product from either Adidas or Puma?',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "n_reps_total": 452,
+      "n_reps_filter_pass": 58,
+      "latency_breakdown": {
+        "wall_s": 6.88270902633667,
+        "slot_ms": 56076
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 510,
+        "per_row_cost_usd": 0.0010591199999999998,
+        "total_cost_usd": 0.08393424
+      }
+    },
+    "score": {
+      "precision": 0.9206349206349206,
+      "recall": 1.0,
+      "f1_score": 0.9586776859504132
+    },
+    "totals": {
+      "wall_s": 9.70535397529602,
+      "wall_breakdown_s": {
+        "dase": 0.27399301528930664,
+        "bq_stage1_ctas": 2.548651933670044,
+        "bq_stage2_aiif": 6.88270902633667
+      },
+      "slot_ms_bq_total": 58979,
+      "cost_usd": 0.08393424,
+      "n_llm_calls": 510
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.97,
+      "paper_DASE_NN": 0.85,
+      "ours_BQ": 0.9586776859504132,
+      "ours_cascade": 0.9586776859504132
+    },
+    "wall_s": {
+      "paper_BQ": 31.1,
+      "paper_DASE_NN": 0.7,
+      "ours_BQ": 307.27350211143494,
+      "ours_cascade": 9.70535397529602
+    },
+    "cost_usd": {
+      "paper_BQ": 0.1,
+      "paper_DASE_NN": 6e-06,
+      "ours_BQ": 0.09037223999999999,
+      "ours_cascade": 0.08393424
+    },
+    "n_llm_calls": {
+      "paper_BQ": 540,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 540,
+      "ours_cascade": 510
+    }
+  }
+}

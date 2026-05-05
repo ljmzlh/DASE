@@ -1,0 +1,5 @@
+{
+  "eps": 0.01,
+  "time_budget": 30.0,
+  "ti_chunk_step": 0.05
+}

@@ -1,0 +1,6 @@
+{
+  "fss": {
+    "sigma_low": 0.05,
+    "sigma_high": 0.80
+  }
+}

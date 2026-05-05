@@ -1,0 +1,164 @@
+{
+  "scenario": "ecomm",
+  "query_id": 14,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "price_limit": 130,
+    "image_tau_low": -0.02,
+    "pair_tau_low": -1.0
+  },
+  "dase_prompts": {
+    "pos_white_socks": [
+      "a pair of white socks",
+      "white socks for feet, athletic or dress socks",
+      "white sock product, footwear accessory"
+    ],
+    "neg_white_socks": [
+      "a non-socks fashion product, like a shirt, pants, dress, or accessory",
+      "colored socks (black, gray, navy, etc.) \u2014 not white",
+      "shoes, sandals, sneakers, or other non-sock footwear"
+    ]
+  },
+  "cascade_form": "F+J+R cascade: (a) image-side dase white-socks contrastive margin (drop-only); (b) pair-side dase product text-emb \u00d7 image-cap emb cos sim (drop-only); Stage 1 CTAS uncertain pairs; Stage 2 q14.sql verbatim with staging-driven JOIN; BQ AI.IF/SCORE prompts unchanged",
+  "dase_breakdown": {
+    "data_load_dase_s": 1.451737403869629
+  },
+  "data": {
+    "n_products_in_scope": 6,
+    "product_ids": [
+      18345,
+      29202,
+      55950,
+      15779,
+      47525,
+      52751
+    ],
+    "n_images_total": 500,
+    "n_total_pairs": 3000,
+    "n_gt": 2,
+    "gt_ids": [
+      18345,
+      29202
+    ]
+  },
+  "dase_partition": {
+    "n_image_keep": 484,
+    "n_pair_uncertain": 2904,
+    "n_pair_drop_image_side": 96,
+    "n_pair_drop_pair_sim": 0,
+    "image_tau_low": -0.02,
+    "pair_tau_low": -1.0
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL on Q14 fit prompt + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 18016,
+      "prompt_audio": 0,
+      "output": 54,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.005539799999999999,
+    "per_row_cost_usd": 0.0005539799999999999,
+    "elapsed_s": 5.630371332168579
+  },
+  "baseline": {
+    "method": "sembench bigquery/q14.sql verbatim",
+    "sql": "SELECT\n  ARRAY_AGG(\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(images.uri, '/')), '.'))\n    ORDER BY AI.SCORE(\n      ('The image ', images.ref, ' fits the description: ',\n       styles_details.productDisplayName, ' ',\n       styles_details.productDescriptors.description.value),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    ) ASC\n    LIMIT 1\n  )[0] AS id\nFROM fashion_product_images.STYLES_DETAILS as styles_details\nJOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) as images\n  ON AI.IF(\n    ('The image ', images.ref, ' fits the description: ',\n     styles_details.productDisplayName, ' ',\n     styles_details.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )\nWHERE styles_details.price < 130\n  AND AI.IF(\n    ('The image ', images.ref, ' depicts white socks'),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )\nGROUP BY\n  styles_details.id,\n  styles_details.productDisplayName,\n  styles_details.productDescriptors.description",
+    "result_ids": [
+      18345,
+      29202
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 22.007304191589355,
+      "slot_ms": 105358
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 9000,
+      "n_llm_calls_method": "n_total_pairs \u00d7 3 AI calls (white-socks AI.IF + fit AI.IF + fit AI.SCORE)",
+      "per_row_cost_usd": 0.0005539799999999999,
+      "total_cost_usd": 4.9858199999999995
+    }
+  },
+  "cascade": {
+    "method": "F+J+R cascade with double dase prefilter: image-side white-socks drop + pair-side cos-sim drop; staging pair table drives Stage 2; BQ AI.IF/SCORE prompts unchanged",
+    "stage1_ctas": {
+      "sql": "CREATE OR REPLACE TABLE fashion_product_images.q14_uncertain_pairs AS\n    SELECT product_id, image_id FROM UNNEST([STRUCT(18345 AS product_id, 53759 AS image_id),STRUCT(18345 AS product_id, 32138 AS image_id),STRUCT(18345 AS product_id, 59435 AS image_id),STRUCT(18345 AS product_id, 34835 AS image_id),STRUCT(18345 AS product_id, 44187 AS image_id),STRUCT(18345 AS product_id, 53554 AS image_id),STRUCT(18345 AS product_id, 39375 AS image_id),STRUCT(18345 AS product_id, 16198 AS image_id),STRUCT(18345 AS product_id, 46411 AS image_id),STRUCT(18345 AS product_id, 8783 AS image_id),STRUCT(18345 AS product_id, 13087 AS image_id),STRUCT(18345 AS product_id, 53565 AS image_id),STRUCT(18345 AS product_id, 53106 AS image_id),STRUCT(18345 AS product_id, 24292 AS image_id),STRUCT(18345 AS product_id, 28209 AS image_id),STRUCT(18345 AS product_id, 58942 AS image_id),STRUCT(18345 AS product_id, 22501 AS image_id),STRUCT(18345 AS product_id, 9259 AS image_id),STRUCT(18345 AS product_id, 36393 AS image_id),STRUCT(18345 AS product_id, 34430 AS image_id),STRUCT(18345 AS product_id, 58743 AS image_id),STRUCT(18345 AS product_id, 23480 AS image_id),STRUCT(18345 AS product_id, 10490 AS image_id),STRUCT(18345 AS product_id, 54142 AS image_id),STRUCT(18345 AS product_id, 21323 AS image_id),STRUCT(18345 AS product_id, 20008 AS image_id),STRUCT(18345 AS product_id, 12902 AS image_id),STRUCT(18345 AS product_id, 36356 AS image_id),STRUCT(18345 AS product_id, 43795 AS image_id),STRUCT(18345 AS product_",
+      "latency_breakdown": {
+        "wall_s": 2.329820394515991,
+        "slot_ms": 3700
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT\n  ARRAY_AGG(\n    ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(i.uri, '/')), '.'))\n    ORDER BY AI.SCORE(\n      ('The image ', i.ref, ' fits the description: ',\n       p.productDisplayName, ' ',\n       p.productDescriptors.description.value),\n      connection_id => 'us.connection',\n      endpoint => 'gemini-2.5-flash'\n    ) ASC\n    LIMIT 1\n  )[0] AS id\nFROM fashion_product_images.q14_uncertain_pairs sp\nJOIN fashion_product_images.STYLES_DETAILS p ON p.id = sp.product_id\nJOIN EXTERNAL_OBJECT_TRANSFORM(TABLE `fashion_product_images.IMAGES`, ['SIGNED_URL']) i\n  ON CAST(ARRAY_FIRST(SPLIT(ARRAY_LAST(SPLIT(i.uri, '/')), '.')) AS INT64) = sp.image_id\nWHERE p.price < 130\n  AND AI.IF(\n    ('The image ', i.ref, ' depicts white socks'),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )\n  AND AI.IF(\n    ('The image ', i.ref, ' fits the description: ',\n     p.productDisplayName, ' ',\n     p.productDescriptors.description.value),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )\nGROUP BY\n  p.id,\n  p.productDisplayName,\n  p.productDescriptors.description",
+      "result_ids": [
+        18345,
+        29202
+      ],
+      "latency_breakdown": {
+        "wall_s": 616.0123064517975,
+        "slot_ms": 2183867
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 8712,
+        "n_llm_calls_method": "n_uncertain_pairs \u00d7 3 AI calls per pair",
+        "per_row_cost_usd": 0.0005539799999999999,
+        "total_cost_usd": 4.826273759999999
+      }
+    },
+    "cascade_ids": [
+      18345,
+      29202
+    ],
+    "score": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "totals": {
+      "wall_s": 619.7938642501831,
+      "wall_breakdown_s": {
+        "dase": 1.451737403869629,
+        "bq_stage1_ctas": 2.329820394515991,
+        "bq_stage2_aiif": 616.0123064517975
+      },
+      "slot_ms_bq_total": 2187567,
+      "cost_usd": 4.826273759999999,
+      "n_llm_calls": 8712
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.37,
+      "paper_DASE_NN": 0.0,
+      "ours_BQ": 1.0,
+      "ours_cascade": 1.0
+    },
+    "wall_s": {
+      "paper_BQ": 73.6,
+      "paper_DASE_NN": 0.7,
+      "ours_BQ": 22.007304191589355,
+      "ours_cascade": 619.7938642501831
+    },
+    "cost_usd": {
+      "paper_BQ": 4.26,
+      "paper_DASE_NN": 5e-06,
+      "ours_BQ": 4.9858199999999995,
+      "ours_cascade": 4.826273759999999
+    },
+    "n_llm_calls": {
+      "paper_BQ": 7690,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 9000,
+      "ours_cascade": 8712
+    }
+  }
+}

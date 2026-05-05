@@ -1,0 +1,139 @@
+{
+  "scenario": "mmqa",
+  "query_id": "6b",
+  "scale_factor": 200,
+  "model": "gemini-2.5-flash",
+  "operator": "sem-filter",
+  "cascade_strategy": "confidence-based skip",
+  "params": {
+    "MARGIN_HI": 0.035,
+    "MARGIN_LO": 0.005
+  },
+  "dase_prompts": {
+    "positive": [
+      "The destination list includes at least one city or airport located in Germany",
+      "These destinations mention flying to Germany or a German city such as Berlin, Munich, or Frankfurt",
+      "The carrier serves a destination that is in Germany"
+    ],
+    "negative": [
+      "No destination in this list is in Germany; only non-German cities are listed",
+      "The text describes routes that do not include any German airport or city",
+      "Germany does not appear as a served country in these destinations"
+    ]
+  },
+  "data": {
+    "n_rows": 200,
+    "n_gt": 1,
+    "gt_airlines": [
+      "Discover Airlines"
+    ]
+  },
+  "dase_partition": {
+    "n_confident_pos": 1,
+    "n_uncertain": 193,
+    "n_confident_neg": 6,
+    "confident_pos_airlines": [
+      "Discover Airlines"
+    ]
+  },
+  "calibration": {
+    "n_sample": 5,
+    "sample_cost_usd": 0.0001297,
+    "per_row_cost_usd": 2.5940000000000002e-05,
+    "elapsed_s": 4.423505544662476
+  },
+  "cascade": {
+    "method": "dase confident_pos union BQ-verified uncertain",
+    "stage1_sql": "\n    CREATE OR REPLACE TABLE mmqa.q6b_uncertain AS\n    SELECT Airlines, Destinations\n    FROM UNNEST(@airlines) AS Airlines WITH OFFSET pos\n    JOIN UNNEST(@dests) AS Destinations WITH OFFSET pos2 ON pos = pos2\n",
+    "stage1_wall_s": 2.1068177223205566,
+    "stage1_slot_ms": 3029,
+    "stage2_sql": "SELECT Airlines FROM mmqa.q6b_uncertain\n    WHERE AI.IF(\"Given destinations '\" || Destinations || \"' of \" || Airlines || \", the airline has flights to Germany.\",\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "stage2_wall_s": 4.3360207080841064,
+    "stage2_slot_ms": 11642,
+    "result_airlines": [
+      "Discover Airlines"
+    ],
+    "score": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "totals": {
+      "wall_s": 6.442838430404663,
+      "slot_ms_bq_total": 14671,
+      "cost_usd": 0.00500642,
+      "n_llm_calls": 193
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.04,
+      "paper_DASE_NN": 0.01,
+      "ours_BQ": 0.8,
+      "ours_cascade": 0.87
+    },
+    "wall_s": {
+      "paper_BQ": 17.3,
+      "paper_DASE_NN": 0.001,
+      "ours_BQ": 305.7126717567444,
+      "ours_cascade": 20.4445
+    },
+    "cost_usd": {
+      "paper_BQ": 0.004,
+      "paper_DASE_NN": 0.0002,
+      "ours_BQ": 0.004,
+      "ours_cascade": 0.00386
+    },
+    "n_llm_calls": {
+      "paper_BQ": 200,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 200,
+      "ours_cascade": 193
+    }
+  },
+  "_ps_our_actual_bq": {
+    "method": "verbatim BQ q6b.sql",
+    "sql": "SELECT Airlines FROM mmqa.tampa_international_airport\n    WHERE AI.IF(\"Given destinations '\" || Destinations || \"' of \" || Airlines || \", the airline has flights to Germany.\",\n      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')",
+    "result_airlines": [
+      "Royal Air Maroc",
+      "Discover Airlines"
+    ],
+    "score": {
+      "f1": 0.6666666666666666,
+      "precision": 0.5,
+      "recall": 1.0
+    },
+    "latency_breakdown": {
+      "wall_s": 305.7126717567444,
+      "slot_ms": 2535223
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 200,
+      "per_row_cost_usd": 2.5940000000000002e-05,
+      "total_cost_usd": 0.005188000000000001
+    }
+  },
+  "_repeat_runs": {
+    "n": 5,
+    "baseline_f1": [
+      0.67,
+      1.0,
+      1.0,
+      0.67,
+      0.67
+    ],
+    "cascade_f1": [
+      0.67,
+      0.67,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "baseline_mean": 0.8,
+    "baseline_std": 0.16,
+    "cascade_mean": 0.87,
+    "cascade_std": 0.16,
+    "_note": "BQ AI.IF stochasticity dominates F1 variance. Royal Air Maroc (Casablanca) randomly judged Germany-positive ~50% of the time"
+  },
+  "_note": "BQ AI.IF unstable on this query: Royal Air Maroc (Casablanca, Morocco) gets randomly judged as Germany-positive ~50% of the time. Both ours_BQ and ours_cascade F1 are 5-run means with std 0.16. cascade mean is marginally higher but well within noise \u2014 no statistically significant cascade win on quality"
+}

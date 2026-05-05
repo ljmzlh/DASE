@@ -1,0 +1,131 @@
+{
+  "scenario": "ecomm",
+  "query_id": 7,
+  "scale_factor": 500,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "params": {
+    "price_limit": 500,
+    "tau_high": 0.95,
+    "tau_low": 0.79
+  },
+  "cascade_form": "Option D-style: dase text-emb cos sim two-threshold pair partition; Stage1 CTAS uncertain (left_id,right_id); Stage2 staging-driver JOIN x STYLES_DETAILS twice with AI.IF prompt verbatim; merge confident_pos \u222a bq_returned",
+  "data": {
+    "n_products_in_scope": 89,
+    "n_candidate_pairs": 7921,
+    "n_gt_positive_pairs": 173,
+    "scope_filter": "price <= 500"
+  },
+  "dase_breakdown": {
+    "data_load_s": 0.13540983200073242,
+    "partition_s": 0.002312898635864258,
+    "total_s": 0.13772273063659668
+  },
+  "dase_partition": {
+    "n_confident_pos": 97,
+    "n_uncertain": 670,
+    "n_drop": 7154,
+    "tau_high": 0.95,
+    "tau_low": 0.79
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL with Q7 pair prompt + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 4048,
+      "prompt_audio": 0,
+      "output": 54,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0013494,
+    "per_row_cost_usd": 0.00013494,
+    "elapsed_s": 15.712327480316162
+  },
+  "baseline": {
+    "method": "sembench bigquery/q7.sql verbatim (model_params stripped)",
+    "sql": "WITH product_selection AS (\n  SELECT *\n  FROM fashion_product_images.STYLES_DETAILS styles_details\n  WHERE true\n    AND price <= 500\n)\nSELECT\n  CONCAT(CAST(p1.id AS STRING), '-', CAST(p2.id AS STRING)) AS id\nFROM product_selection p1\nJOIN product_selection p2\n  ON AI.IF(('''\n     You will be given two product descriptions. Do both product descriptions describe products of the same category from the same brand, e.g., both are t-shirts from Adidas?\n     \n     The first product description is:\n     ''', p1.productDisplayName, ' - ', p1.productDescriptors.description.value,\n           '''\n     The second product description is:\n     ''', p2.productDisplayName, ' - ', p2.productDescriptors.description.value\n          ),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+    "n_returned": 221,
+    "score": {
+      "precision": 0.7104072398190046,
+      "recall": 0.9075144508670521,
+      "f1_score": 0.7969543147208122
+    },
+    "latency_breakdown": {
+      "wall_s": 623.7813377380371,
+      "slot_ms": 4286954
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 7921,
+      "n_llm_calls_method": "n_scope^2 (Cartesian self-join)",
+      "per_row_cost_usd": 0.00013494,
+      "total_cost_usd": 1.06885974
+    }
+  },
+  "cascade": {
+    "method": "Option D-style: dase 89\u00d789 cos sim \u2192 two-threshold partition \u2192 Stage1 staging pairs \u2192 Stage2 verbatim AI.IF on uncertain",
+    "stage1_ctas": {
+      "sql": "CREATE OR REPLACE TABLE fashion_product_images.q7_uncertain_pairs AS\n    SELECT left_id, right_id FROM UNNEST([STRUCT(15783 AS left_id, 27952 AS right_id),STRUCT(15783 AS left_id, 28047 AS right_id),STRUCT(15783 AS left_id, 32138 AS right_id),STRUCT(15783 AS left_id, 15754 AS right_id),STRUCT(15783 AS left_id, 15779 AS right_id),STRUCT(15783 AS left_id, 28011 AS right_id),STRUCT(15783 AS left_id, 34601 AS right_id),STRUCT(15783 AS left_id, 36378 AS right_id),STRUCT(15783 AS left_id, 36385 AS right_id),STRUCT(15783 AS left_id, 47525 AS right_id),STRUCT(15783 AS left_id, 49931 AS right_id),STRUCT(15783 AS left_id, 49939 AS right_id),STRUCT(15783 AS left_id, 50544 AS right_id),STRUCT(15783 AS left_id, 50621 AS right_id),STRUCT(15783 AS left_id, 50988 AS right_id),STRUCT(15783 AS left_id, 54188 AS right_id),STRUCT(16834 AS left_id, 21863 AS right_id),STRUCT(16834 AS left_id, 34430 AS right_id),STRUCT(16834 AS left_id, 39856 AS right_id),STRUCT(16834 AS left_id, 9825 AS right_id),STRUCT(16834 AS left_id, 10689 AS right_id),STRUCT(16834 AS left_id, 23165 AS right_id),STRUCT(16834 AS left_id, 30292 AS right_id),STRUCT(16834 AS left_id, 34011 AS right_id),STRUCT(16834 AS left_id, 34106 AS right_id),STRUCT(16834 AS left_id, 34342 AS right_id),STRUCT(16834 AS left_id, 53126 AS right_id),STRUCT(18217 AS left_id, 18345 AS right_id),STRUCT(18217 AS left_id, 29202 AS right_id),STRUCT(18217 AS left_id, 40015 AS right_id),STRUCT(18217 AS left_id, 9358 AS right_id),STRUCT(18217 AS left_id, 34",
+      "latency_breakdown": {
+        "wall_s": 2.194488286972046,
+        "slot_ms": 3190
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT\n  CONCAT(CAST(p1.id AS STRING), '-', CAST(p2.id AS STRING)) AS id\nFROM fashion_product_images.q7_uncertain_pairs pairs\nJOIN fashion_product_images.STYLES_DETAILS p1 ON p1.id = pairs.left_id\nJOIN fashion_product_images.STYLES_DETAILS p2 ON p2.id = pairs.right_id\nWHERE AI.IF(('''\n     You will be given two product descriptions. Do both product descriptions describe products of the same category from the same brand, e.g., both are t-shirts from Adidas?\n     \n     The first product description is:\n     ''', p1.productDisplayName, ' - ', p1.productDescriptors.description.value,\n             '''\n     The second product description is:\n     ''', p2.productDisplayName, ' - ', p2.productDescriptors.description.value\n            ),\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n  )",
+      "n_returned": 126,
+      "latency_breakdown": {
+        "wall_s": 332.9352421760559,
+        "slot_ms": 1465753
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 670,
+        "n_llm_calls_method": "|uncertain pairs|",
+        "per_row_cost_usd": 0.00013494,
+        "total_cost_usd": 0.0904098
+      }
+    },
+    "score": {
+      "precision": 0.7219730941704036,
+      "recall": 0.930635838150289,
+      "f1_score": 0.8131313131313131
+    },
+    "totals": {
+      "wall_s": 335.26745319366455,
+      "wall_breakdown_s": {
+        "dase": 0.13772273063659668,
+        "bq_stage1_ctas": 2.194488286972046,
+        "bq_stage2_aiif": 332.9352421760559
+      },
+      "slot_ms_bq_total": 1468943,
+      "cost_usd": 0.0904098,
+      "n_llm_calls": 670
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.83,
+      "paper_DASE_NN": 0.78,
+      "ours_BQ": 0.7969543147208122,
+      "ours_cascade": 0.8131313131313131
+    },
+    "wall_s": {
+      "paper_BQ": 45.4,
+      "paper_DASE_NN": 0.002,
+      "ours_BQ": 623.7813377380371,
+      "ours_cascade": 335.26745319366455
+    },
+    "cost_usd": {
+      "paper_BQ": 0.86,
+      "paper_DASE_NN": 1e-09,
+      "ours_BQ": 1.06885974,
+      "ours_cascade": 0.0904098
+    },
+    "n_llm_calls": {
+      "paper_BQ": 6373,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 7921,
+      "ours_cascade": 670
+    }
+  }
+}

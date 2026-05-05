@@ -1,0 +1,190 @@
+{
+  "scenario": "cars",
+  "query_id": 10,
+  "operator": "C",
+  "scale_factor": 19672,
+  "model": "gemini-2.5-flash",
+  "thinking_budget_for_calibration": 0,
+  "prompt": "Classify car complaint to one of given problem categories. Answer only one of given problem categories, nothing more. Complaint: %s",
+  "categories": [
+    "ELECTRICAL SYSTEM",
+    "POWER TRAIN",
+    "ENGINE",
+    "STEERING",
+    "SERVICE BRAKES",
+    "STRUCTURE",
+    "AIR BAGS",
+    "ENGINE AND ENGINE COOLING",
+    "VEHICLE SPEED CONTROL",
+    "VISIBILITY/WIPER",
+    "FUEL/PROPULSION SYSTEM",
+    "FORWARD COLLISION AVOIDANCE",
+    "EXTERIOR LIGHTING",
+    "SUSPENSION",
+    "FUEL SYSTEM",
+    "VISIBILITY",
+    "WHEELS",
+    "SEAT BELTS",
+    "BACK OVER PREVENTION",
+    "TIRES",
+    "SEATS",
+    "LATCHES/LOCKS/LINKAGES",
+    "LANE DEPARTURE",
+    "EQUIPMENT"
+  ],
+  "structural_filter": "",
+  "params": {
+    "alpha": 0.5,
+    "K_classes": 24
+  },
+  "dase_prompts": {
+    "anchors": [
+      "complaint about electrical system",
+      "complaint about power train",
+      "complaint about engine",
+      "complaint about steering",
+      "complaint about service brakes",
+      "complaint about structure",
+      "complaint about air bags",
+      "complaint about engine and engine cooling",
+      "complaint about vehicle speed control",
+      "complaint about visibility/wiper",
+      "complaint about fuel/propulsion system",
+      "complaint about forward collision avoidance",
+      "complaint about exterior lighting",
+      "complaint about suspension",
+      "complaint about fuel system",
+      "complaint about visibility",
+      "complaint about wheels",
+      "complaint about seat belts",
+      "complaint about back over prevention",
+      "complaint about tires",
+      "complaint about seats",
+      "complaint about latches/locks/linkages",
+      "complaint about lane departure",
+      "complaint about equipment"
+    ]
+  },
+  "cascade_form": "C canonical: 24 anchors \u2192 argmax + confidence (top1\u2212top2) \u2192 alpha=0.5 (bottom by confidence \u2192 BQ AI.CLASSIFY); merge dase predicted class with BQ class on uncertain rows",
+  "data": {
+    "n_complaints": 19657,
+    "n_gt_rows": 19657
+  },
+  "dase_breakdown_s": {
+    "data_load": 3.1999340057373047,
+    "embed_prompts": 1.1993346214294434,
+    "margin_compute": 0.7049171924591064,
+    "rank_topk_or_partition": 0.17868661880493164,
+    "total": 5.282872438430786
+  },
+  "dase_partition": {
+    "n_uncertain": 9828,
+    "n_confident": 9829,
+    "confidence_min": 8.344650268554688e-07,
+    "confidence_median": 0.016114532947540283,
+    "confidence_max": 0.11384987831115723
+  },
+  "calibration": {
+    "method": "AI.GENERATE_BOOL with Q10 FORMAT prompt approximation + thinking_budget=0",
+    "n_sample": 10,
+    "tokens_total": {
+      "prompt_other": 2247,
+      "prompt_audio": 0,
+      "output": 82,
+      "thoughts": 0
+    },
+    "sample_cost_usd": 0.0008791,
+    "per_row_cost_usd": 8.790999999999999e-05,
+    "elapsed_s": 27.04545760154724
+  },
+  "baseline": {
+    "method": "Q10.sql verbatim",
+    "sql": "SELECT p.car_id, AI.CLASSIFY(\n    FORMAT('Classify car complaint to one of given problem categories. Answer only one of given problem categories, nothing more. Complaint: %s', c.summary),\n    categories => [\"ELECTRICAL SYSTEM\", \"POWER TRAIN\", \"ENGINE\", \"STEERING\", \"SERVICE BRAKES\", \"STRUCTURE\", \"AIR BAGS\", \"ENGINE AND ENGINE COOLING\", \"VEHICLE SPEED CONTROL\", \"VISIBILITY/WIPER\", \"FUEL/PROPULSION SYSTEM\", \"FORWARD COLLISION AVOIDANCE\", \"EXTERIOR LIGHTING\", \"SUSPENSION\", \"FUEL SYSTEM\", \"VISIBILITY\", \"WHEELS\", \"SEAT BELTS\", \"BACK OVER PREVENTION\", \"TIRES\", \"SEATS\", \"LATCHES/LOCKS/LINKAGES\", \"LANE DEPARTURE\", \"EQUIPMENT\"],\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n) AS problem_category\nFROM cars_dataset.cars AS p\nJOIN cars_dataset.complaints AS c ON p.car_id = c.car_id",
+    "score": {
+      "precision": 0.5823453260174992,
+      "recall": 0.6386691158692462,
+      "f1_score": 0.5714938870540762
+    },
+    "latency_breakdown": {
+      "wall_s": 308.2129282951355,
+      "slot_ms": 1605279
+    },
+    "cost_breakdown": {
+      "n_llm_calls": 19657,
+      "n_llm_calls_method": "scope size (no LIMIT)",
+      "per_row_cost_usd": 8.790999999999999e-05,
+      "total_cost_usd": 1.7280468699999998
+    }
+  },
+  "cascade": {
+    "method": "C canonical: 24-anchor argmax + confidence partition (alpha=0.5); dase class on confident half, BQ AI.CLASSIFY on uncertain half",
+    "stage1_ctas": {
+      "sql": "\n    CREATE OR REPLACE TABLE cars_dataset.q10_uncertain_complaints AS\n    SELECT * FROM cars_dataset.complaints\n    WHERE complaint_id IN UNNEST(@cids)\n",
+      "latency_breakdown": {
+        "wall_s": 3.5509238243103027,
+        "slot_ms": 10066
+      },
+      "cost_usd": 0.0
+    },
+    "stage2_run": {
+      "sql": "SELECT s.car_id, s.complaint_id, AI.CLASSIFY(\n    FORMAT('Classify car complaint to one of given problem categories. Answer only one of given problem categories, nothing more. Complaint: %s', s.summary),\n    categories => [\"ELECTRICAL SYSTEM\", \"POWER TRAIN\", \"ENGINE\", \"STEERING\", \"SERVICE BRAKES\", \"STRUCTURE\", \"AIR BAGS\", \"ENGINE AND ENGINE COOLING\", \"VEHICLE SPEED CONTROL\", \"VISIBILITY/WIPER\", \"FUEL/PROPULSION SYSTEM\", \"FORWARD COLLISION AVOIDANCE\", \"EXTERIOR LIGHTING\", \"SUSPENSION\", \"FUEL SYSTEM\", \"VISIBILITY\", \"WHEELS\", \"SEAT BELTS\", \"BACK OVER PREVENTION\", \"TIRES\", \"SEATS\", \"LATCHES/LOCKS/LINKAGES\", \"LANE DEPARTURE\", \"EQUIPMENT\"],\n    connection_id => 'us.connection',\n    endpoint => 'gemini-2.5-flash'\n) AS problem_category\nFROM cars_dataset.q10_uncertain_complaints AS s",
+      "latency_breakdown": {
+        "wall_s": 252.70493030548096,
+        "slot_ms": 577589
+      },
+      "cost_breakdown": {
+        "n_llm_calls": 9828,
+        "per_row_cost_usd": 8.790999999999999e-05,
+        "total_cost_usd": 0.8639794799999999
+      }
+    },
+    "score": {
+      "precision": 0.571457296984757,
+      "recall": 0.6248884226196129,
+      "f1_score": 0.558825076351746
+    },
+    "totals": {
+      "wall_s": 261.53872656822205,
+      "wall_breakdown_s": {
+        "dase": 5.282872438430786,
+        "bq_stage1_ctas": 3.5509238243103027,
+        "bq_stage2_aiif": 252.70493030548096
+      },
+      "slot_ms_bq_total": 587655,
+      "cost_usd": 0.8639794799999999,
+      "n_llm_calls": 9828
+    }
+  },
+  "comparison": {
+    "score": {
+      "paper_BQ": 0.57,
+      "paper_DASE_NN": 0.45,
+      "ours_BQ": 0.5714938870540762,
+      "ours_cascade": 0.558825076351746,
+      "_baseline_source": "ours"
+    },
+    "wall_s": {
+      "paper_BQ": 62.0,
+      "paper_DASE_NN": 1.8,
+      "ours_BQ": 308.2129282951355,
+      "ours_cascade": 261.53872656822205
+    },
+    "slot_ms_bq": {
+      "ours_BQ": 1605279,
+      "ours_cascade": 587655,
+      "cascade_stage2": 577589
+    },
+    "cost_usd": {
+      "paper_BQ": 2.7,
+      "paper_DASE_NN": 2e-05,
+      "ours_BQ": 1.7280468699999998,
+      "ours_cascade": 0.8639794799999999
+    },
+    "n_llm_calls": {
+      "paper_BQ": 30713,
+      "paper_DASE_NN": 0,
+      "ours_BQ": 19657,
+      "ours_cascade": 9828
+    }
+  }
+}
