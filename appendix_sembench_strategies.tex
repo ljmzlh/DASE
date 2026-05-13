@@ -1,0 +1,164 @@
+% =====================================================================
+% Appendix: DASE strategies per SemBench semantic operator
+% Drop into the main paper after \section{Conclusions}, e.g.
+%   \appendix
+%   \input{appendix_sembench_strategies}
+% =====================================================================
+
+\appendix
+
+\section{DASE Strategies per Semantic Operator}
+\label{app:sembench-strategies}
+
+A natural-language query compiles into a query plan in which a few steps
+require LLM-grade reasoning---these are the \emph{semantic operators}
+\textsc{sem\_filter}~(F), \textsc{sem\_join}~(J), \textsc{sem\_map}~(M),
+\textsc{sem\_rank}~(R), and \textsc{sem\_classify}~(C). On SemBench
+(\S\ref{sec:experiments}), DASE plays the role of a \emph{candidate
+recommender} for a downstream semantic-operator engine (BigQuery in our
+experiments): rather than letting the engine evaluate the LLM call on
+every tuple of the input table, DASE uses the SemJI-resident embeddings
+to recommend a small, high-recall set of \emph{top tuples} that the
+downstream engine then evaluates with its native semantic operator. The
+recommendation rule depends on the operator. The remainder of this
+appendix walks through each of the five operators and describes how DASE
+selects its top tuples; the reader can refer back to Table~\ref{tab:sembench}
+for the per-query operator labelling and to Table~\ref{tab:results-sembench}
+for the resulting cost/quality.
+
+\subsection{\textsc{sem\_filter} (F)}
+
+A \textsc{sem\_filter} call evaluates an NL Boolean predicate~$\ell$ on
+every tuple of an input relation~$T$. DASE recommends the tuples
+\emph{most likely to satisfy~$\ell$} by scoring rows with a contrastive
+margin in the embedding space. From the predicate we elicit a small set
+of positive paraphrases $P{=}\{p_1,\ldots\}$ and antithetical
+paraphrases $N{=}\{n_1,\ldots\}$ (typically three each), embed them
+once as retrieval-query vectors, and assign each row
+\[
+  s_i \;=\;
+    \tfrac{1}{|P|}\sum_{p\in P}\!\cos(\mathbf{e}_p,\mathbf{e}_i)
+    \;-\;
+    \tfrac{1}{|N|}\sum_{n\in N}\!\cos(\mathbf{e}_n,\mathbf{e}_i).
+\]
+The contrastive form cancels the topic component shared between the
+positive and negative anchors, which we found empirically more reliable
+than single-anchor cosine. Two recommendation rules cover all SemBench
+\textsc{sem\_filter} workloads:
+\begin{itemize}
+\item \emph{Bottom-$\alpha$ uncertain.} When the engine must label every
+  row (\emph{Wildlife}~Q1 ``count zebra images''), DASE returns the rows
+  with the smallest~$|s_i|$---the operator's hard cases---and asserts the
+  cheap sign for the rest. The fraction $\alpha$ is fitted on a
+  calibration split (typically 0.2--0.5).
+\item \emph{Top-$K'$ shortlist.} When the predicate is paired with
+  \texttt{LIMIT~$K$} (\emph{Movie}~Q1 ``five clearly positive
+  reviews''), DASE returns the $K'\!\geq\!K$ rows of highest~$s_i$ and
+  the engine's \texttt{AI.IF}+\texttt{LIMIT} short-circuits at the
+  $K$-th survivor; this is what reduces \emph{Movie}~Q1 from~$26.3$\,s
+  to~$0.5$\,s in Table~\ref{tab:results-sembench}.
+\end{itemize}
+
+\subsection{\textsc{sem\_join} (J)}
+
+A \textsc{sem\_join} evaluates an NL match predicate over pairs
+$(t_i,t_j)\!\in\!T_1\!\times\!T_2$, with naive cost
+$|T_1|\!\cdot\!|T_2|$ LLM calls. DASE recommends the candidate \emph{pairs}
+most likely to match by computing the cosine-similarity matrix
+$S\in\mathbb{R}^{|T_1|\times|T_2|}$ over normalised embeddings of the
+in-scope rows, with the diagonal masked for self-joins. Two
+recommendation rules:
+\begin{itemize}
+\item \emph{Two-sided absolute thresholds} (\emph{Ecomm}~Q7 ``same
+  brand, same category''). DASE forwards the pairs with
+  $\tau_{\mathrm{lo}}{<}S_{ij}{<}\tau_{\mathrm{hi}}$, asserting matches
+  for $S_{ij}\!\geq\!\tau_{\mathrm{hi}}$ and dropping
+  $S_{ij}\!\leq\!\tau_{\mathrm{lo}}$ outright. Thresholds are fitted on
+  a small calibration split using the symmetric tail-event geometry
+  of~\S\ref{sec:semji}.
+\item \emph{Top-$K$ poles}, used when the user wants extreme pairs
+  (\emph{Movie}~Q5 ``ten same-sentiment review pairs''): DASE forwards
+  the top-$K$ highest-similarity \emph{and} the top-$K$
+  lowest-similarity pairs, the engine resolves both with one
+  \texttt{AI.IF}+\texttt{LIMIT} call.
+\end{itemize}
+The recommended pair set is materialised as a tiny staging table; the
+engine joins it twice back to the underlying relation to read the
+column values and applies its native \texttt{AI.IF} on the concatenated
+prompt. The crucial property is that the staging cardinality scales
+with the band width, not the Cartesian product---unprefiltered baselines
+time out on \emph{Movie}~Q5 where the in-scope $\mathrm{reviews}^2$
+exceeds a million pairs.
+
+\subsection{\textsc{sem\_map} (M)}
+
+A \textsc{sem\_map} call applies a per-row NL transformation that
+returns a free-form string (\emph{Ecomm}~Q3 brand extraction;
+\emph{Ecomm}~Q12 colour labelling; \emph{MMQA}~Q4 genre clustering). The
+output domain is open-vocabulary, so the contrastive-margin proxy used
+for F/J does not apply. Instead, DASE exploits a different kind of
+redundancy: rows whose embeddings are near-duplicates almost certainly
+map to the \emph{same} string, so a single LLM call on one row labels
+all of them.
+
+DASE clusters the input embeddings with agglomerative clustering
+(cosine metric, complete linkage, distance threshold $\tau_d{=}0.10$,
+i.e.\ similarity~$\geq$~0.90) and recommends one tuple per cluster---the
+medoid nearest the cluster centroid. The downstream engine runs
+\texttt{AI.GENERATE} on this $K$-tuple shortlist (typically $K\!\ll\!|T|$;
+on \emph{Ecomm}~Q3 this is roughly $90$ rows out of $500$), and the
+returned label of each medoid is broadcast to its cluster via a join on
+the synthetic cluster id---i.e.\ the broadcast itself is plain SQL,
+not a special primitive. ARI degrades only when the threshold is loose
+enough to fuse two genuinely distinct entities into one cluster, which
+on SemBench~\emph{Ecomm} costs less than $0.01$ ARI.
+
+\subsection{\textsc{sem\_rank} (R)}
+
+A \textsc{sem\_rank} call asks the engine to score or order rows by a
+rubric. DASE has two recommendation rules depending on whether the
+output is a $K$-element ordered list or a per-row score:
+\begin{itemize}
+\item \emph{Top-$K$ retrieval} reduces to the F+R case: DASE returns
+  the $K'$ rows of highest cheap score, the engine resolves with
+  \texttt{AI.IF}+\texttt{LIMIT}.
+\item \emph{Rubric scoring} (\emph{Movie}~Q9 ``score 1--5 how much the
+  reviewer liked the movie'') needs a numeric label on every row, so
+  DASE cannot drop confident rows without breaking the rank
+  correlation. We embed the rubric anchors once (one prompt per
+  rubric grade), compute, for each row, the argmax anchor (the cheap
+  rubric label) and the top1${-}$top2 confidence. DASE then recommends
+  the tuples in the bottom-$\alpha$ confidence tail to the engine for
+  refinement via \texttt{AI.SCORE}. The two streams---cheap rubric
+  scores on the confident bulk, LLM scores on the uncertain
+  tail---are concatenated into the final ranking. We use a
+  conservative $\alpha\!\approx\!0.7$ here because Spearman integrates
+  over the score distribution: a single mis-ranked row degrades the
+  global metric, so we trade more LLM calls for tail protection.
+\end{itemize}
+
+\subsection{\textsc{sem\_classify} (C)}
+
+A \textsc{sem\_classify} call assigns each row to one of $K$ enumerated
+classes (\emph{Cars}~Q10: $24$ problem categories for car complaints).
+DASE embeds each class anchor prompt once and, for every row, computes
+the per-anchor cosine vector; the argmax is the cheap predicted class
+and the top1${-}$top2 gap is the confidence. DASE recommends the
+bottom-$\alpha$ confidence tuples to the engine for refinement via
+\texttt{AI.CLASSIFY}, while the engine accepts the cheap argmax for the
+remaining rows. The output is the union of the two streams, and macro
+$F_1$ on \emph{Cars}~Q10 stays within one point of the all-LLM baseline
+at roughly half the cost (Table~\ref{tab:results-sembench}).
+
+\subsection{Cost calibration}
+
+All five operator strategies share a single per-row cost calibration:
+DASE samples $k{=}10$ representative rows, runs them through
+\texttt{AI.GENERATE\_BOOL} with the same prompt structure and modality
+binding (text inline, image/audio via \texttt{ot.ref}) as the operator
+under study with \texttt{thinking\_budget}=$0$, aggregates token counts
+by category, prices each at the published Gemini-2.5-Flash rate, and
+divides by~$k$. The result is a per-row USD figure that the cascade
+multiplies by the number of tuples actually forwarded to the downstream
+engine to report \texttt{cost\_usd}; \textsc{sem\_join} uses an
+analogous per-pair calibration with two STRING parameters per sample.
