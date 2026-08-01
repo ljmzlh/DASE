@@ -32,22 +32,19 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     ClusterCascade, AiGenerateVerifier,
     bq_client, per_row_cost, run_query,
-    ari_score, build_profile, write_profile, print_summary,
+    ari_score, build_profile, write_profile,
 )
 
 ECOMM_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 PRODUCTS_PARQUET = os.path.join(ECOMM_DIR, "data", "products_text.parquet")
 STYLES_PARQUET   = os.path.join(ECOMM_DIR, "cache", "sf_500", "styles_details.parquet")
 PROFILE_PATH     = os.path.join(ECOMM_DIR, "outputs", "Q3.json")
-BASELINE_CACHE   = os.path.join(ECOMM_DIR, "outputs", "Q3_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 DATASET = "fashion_product_images"
 STAGING = f"{DATASET}.q3_reps"
 
 TAU_DIST = 0.10                                        # cosine distance; sim > 0.90
-PAPER_BQ_Q3 = {"score_ari": 0.97, "latency_s": 21.2, "cost_usd": 0.12}
-SKIP_BASELINE = False
 
 # Verbatim sembench Q3 BQ template — cascade reuses with table swap.
 def _q3_sql_for(table: str) -> str:
@@ -156,69 +153,10 @@ def main():
                    "cost_usd": cres.verifier_result.cost_usd, "n_llm_calls": cres.verifier_result.n_calls},
     }
 
-    # ── Baseline (cached if available — runs cost ~$0.04 each, so cache aggressively) ──
-    if SKIP_BASELINE:
-        b_ari, bwall, bslot = PAPER_BQ_Q3["score_ari"], PAPER_BQ_Q3["latency_s"], None
-        bcost, bcalls = PAPER_BQ_Q3["cost_usd"], n_total
-        profile["baseline"] = {"_status": "aborted",
-                               "score": {"ari": b_ari, "_source": "paper"},
-                               "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                               "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"}}
-    elif os.path.exists(BASELINE_CACHE):
-        print(f"\n=== Baseline (cached from {BASELINE_CACHE}) ===")
-        with open(BASELINE_CACHE) as f:
-            cache = json.load(f)
-        bres = {int(k): v for k, v in cache["bres"].items()}
-        bwall, bslot, b_ari, bcalls = cache["wall_s"], cache["slot_ms"], cache["ari"], cache["n_calls"]
-        bcost = per_row * bcalls
-        print(f"  cached: {len(bres)} (id, brand); ARI={b_ari:.4f}, wall={bwall:.2f}s, cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/q3.sql verbatim — CACHED", "_cache_source": BASELINE_CACHE,
-            "score": {"ari": float(b_ari)},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
-    else:
-        print("\n=== Baseline (sembench q3.sql verbatim on STYLES_DETAILS) ===")
-        bdf, bwall, bslot, bsql = run_query(client, _q3_sql_for(f"{DATASET}.STYLES_DETAILS"))
-        bres = {int(row["id"]): str(row["category"]).strip() for _, row in bdf.iterrows()}
-        common = sorted(bres.keys() & gt_map.keys())
-        b_ari = ari_score([bres[i] for i in common], [gt_map[i] for i in common])
-        bcalls = n_total
-        bcost = per_row * bcalls
-        print(f"  ARI={b_ari:.4f}, wall={bwall:.2f}s, cost=${bcost:.6f}")
-        with open(BASELINE_CACHE, "w") as f:
-            json.dump({"bres": {str(k): v for k, v in bres.items()},
-                       "wall_s": bwall, "slot_ms": bslot,
-                       "ari": float(b_ari), "n_calls": bcalls,
-                       "_note": "Cached BQ baseline. Delete to force re-run."},
-                      f, indent=2)
-        profile["baseline"] = {
-            "method": "sembench bigquery/q3.sql verbatim on STYLES_DETAILS", "sql": bsql,
-            "score": {"ari": float(b_ari)},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
-    profile["comparison"] = {
-        "score":       {"paper_BQ": PAPER_BQ_Q3["score_ari"], "ours_BQ": float(b_ari), "ours_cascade": float(c_ari)},
-        "wall_s":      {"paper_BQ": PAPER_BQ_Q3["latency_s"], "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": PAPER_BQ_Q3["cost_usd"], "ours_BQ": bcost, "ours_cascade": cres.verifier_result.cost_usd},
-        "n_llm_calls": {"paper_BQ": round(PAPER_BQ_Q3["cost_usd"] / per_row), "ours_BQ": bcalls, "ours_cascade": cres.verifier_result.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        "Ecomm Q3 (ClusterCascade)",
-        columns=["paper BQ", "ours BQ", "ours cascade"],
-        rows=[
-            ("ARI",        [PAPER_BQ_Q3["score_ari"], b_ari, c_ari], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q3["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q3["cost_usd"], bcost, cres.verifier_result.cost_usd], ".4f"),
-            ("#LLM calls", [round(PAPER_BQ_Q3["cost_usd"] / per_row), bcalls, cres.verifier_result.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

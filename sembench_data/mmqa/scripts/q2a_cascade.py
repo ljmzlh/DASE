@@ -38,7 +38,7 @@ from generic_evaluator import GenericEvaluator  # noqa: E402
 from dase_cascade import (  # noqa: E402
     MarginSignal, PairCosineSignal, AiIfVerifier,
     embed_query, bq_client, per_row_cost, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 
 MMQA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -66,9 +66,6 @@ NONE_PHRASE = "not the logo or name of any specific horse racing track"
 ALPHA = 0.2  # filter default; small GT (5 pairs), bumping doesn't help much
 LOGO_LO = 0.02         # logo_margin below this → not a clear logo, drop
 TRACK_GAP = 0.10       # tracks within GAP of the top-1 are competitive
-PAPER_BQ_Q2a = {"score": None, "latency_s": None, "cost_usd": None}  # TBD: paper Q2 mmqa row mapping unclear
-PAPER_DASE_NN_Q2a = {"score": None, "latency_s": 1e-3, "cost_usd": 1e-9}  # placeholder
-SKIP_BASELINE = True  # full-Cartesian baseline is long-running; reuse paper numbers
 
 
 def make_q2a_verifier():
@@ -217,23 +214,6 @@ def main():
     print(f"  per_pair=${per_row:.6f}")
     profile["calibration"] = cal.to_dict()
 
-    if SKIP_BASELINE:
-        bcost = (PAPER_BQ_Q2a["cost_usd"] if PAPER_BQ_Q2a["cost_usd"] is not None
-                 else per_row * n_pairs)
-        bwall = PAPER_BQ_Q2a["latency_s"] if PAPER_BQ_Q2a["latency_s"] is not None else None
-        bcalls = n_pairs
-        bscore = PAPER_BQ_Q2a["score"]
-        b_pairs = None
-        profile["baseline"] = {
-            "_status": "skipped (full-Cartesian baseline is long-running)",
-            "score": {"f1": bscore, "_source": "paper Table 4 (TBD mapping)"},
-            "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_pair_cost_usd": per_row,
-                                "total_cost_usd": bcost,
-                                "_source": "estimated (per_pair × n_pairs)"},
-        }
-    else:
-        raise NotImplementedError("baseline run not implemented; SKIP_BASELINE=True")
 
     # ── Stage 2: AiIfVerifier (CTAS + AI.IF) ──
     if uncertain_pairs_for_bq:
@@ -295,28 +275,9 @@ def main():
                    "cost_usd": cascade_cost, "n_llm_calls": s2_calls},
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q2a["score"], "paper_DASE_NN": PAPER_DASE_NN_Q2a["score"],
-                   "ours_BQ": bscore if SKIP_BASELINE else None, "ours_cascade": cscore.f1_score},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q2a["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q2a["latency_s"],
-                    "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q2a["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q2a["cost_usd"],
-                      "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": n_pairs, "paper_DASE_NN": 0,
-                         "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"MMQA Q2a (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q2a["score"], PAPER_DASE_NN_Q2a["score"], bscore, cscore.f1_score], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q2a["cost_usd"], PAPER_DASE_NN_Q2a["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [n_pairs, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

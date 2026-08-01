@@ -10,17 +10,17 @@ Public API:
   Verifiers:  AiIfVerifier, AiGenerateVerifier     (BQ stage)
   Solvers:    Cascade, ClusterCascade
   Scoring:    f1_set, relative_error_score, ari_score
-  Output:     build_profile, write_profile, print_summary
+    Output:     build_profile, write_profile, build_cascade_summary
   Runtime:    embed_query, bq_client, run_query, PRICES, per_row_cost
 """
 import os as _os
 import sys as _sys
 
 # Patch sys.path so cascade scripts can `from dase_cascade import ...`
-# and downstream code can find `tools.llm_tool` at the dase_clean root.
+# and downstream code can find `tools.llm_tool` at the DASE repository root.
 _HERE = _os.path.dirname(_os.path.abspath(__file__))           # sembench_data/dase_cascade/
 _SEMBENCH_MY = _os.path.dirname(_HERE)                          # sembench_data/
-_DASE_ROOT = _os.path.dirname(_SEMBENCH_MY)                     # dase_clean/
+_DASE_ROOT = _os.path.dirname(_SEMBENCH_MY)                     # repository root
 for _p in (_DASE_ROOT, _SEMBENCH_MY):
     if _p not in _sys.path:
         _sys.path.insert(0, _p)
@@ -39,7 +39,8 @@ from dase_cascade.verifier import (
 from dase_cascade.cascade import Cascade, CascadeResult
 from dase_cascade.cluster import ClusterCascade, ClusterCascadeResult
 from dase_cascade.score import f1_set, relative_error_score, ari_score
-from dase_cascade.profile import build_profile, write_profile, print_summary
+from dase_cascade.profile import build_profile, write_profile
+from dase_cascade.summary import build_cascade_summary
 
 __all__ = [
     "PRICES", "embed_query", "bq_client", "run_query", "cosine_sim_batch",
@@ -50,5 +51,5 @@ __all__ = [
     "Cascade", "CascadeResult",
     "ClusterCascade", "ClusterCascadeResult",
     "f1_set", "relative_error_score", "ari_score",
-    "build_profile", "write_profile", "print_summary",
+    "build_profile", "write_profile", "build_cascade_summary",
 ]

@@ -14,7 +14,7 @@ There's no Signal class for "3 independent margins AND-combined", so we use
 3 MarginSignals + 3 AbsoluteBand partitions inline, then construct a partition
 manually and run an AiIfVerifier on the resulting uncertain set.
 
-Stage 2 baseline + cascade SQL use a sub-EXTERNAL-TABLE on uncertain GCS URIs.
+Stage 2 verifier SQL uses a sub-EXTERNAL-TABLE on uncertain GCS URIs.
 """
 import os
 import sys
@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     MarginSignal, AbsoluteBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 ECOMM_DIR = os.path.abspath(os.path.join(_HERE, ".."))
@@ -75,9 +75,6 @@ NEG_SILVER = [
 TAU_HIGH = 0.10
 TAU_LOW = -0.02
 
-PAPER_BQ_Q2 = {"score_f1": 0.21, "latency_s": 55.7, "cost_usd": 3.96}
-PAPER_DASE_NN_Q2 = {"score_f1": 0.47, "latency_s": 0.7, "cost_usd": 7e-6}
-SKIP_BASELINE = False
 
 Q2_PROMPT = "The image shows a (pair of) sports shoe(s) that feature the colors yellow and silver."
 
@@ -228,36 +225,6 @@ def main():
     print(f"  per_row=${per_row:.6f}, sample_cost=${cal.sample_cost_usd:.6f}, elapsed={cal.elapsed_s:.1f}s")
     profile["calibration"] = cal.to_dict()
 
-    # ── Baseline ──
-    if SKIP_BASELINE:
-        b_f1 = PAPER_BQ_Q2["score_f1"]; bwall = PAPER_BQ_Q2["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q2["cost_usd"]; bcalls = n_total
-        bres_ids = set()
-        bp = br = 0.0
-        profile["baseline"] = {
-            "_status": "aborted", "method": "...not run",
-            "score": {"f1_score": b_f1, "_source": "paper"},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": None, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row,
-                               "total_cost_usd": bcost, "_source": "paper"},
-        }
-    else:
-        print("\n=== Baseline (sembench q2.sql verbatim on IMAGES) ===")
-        bdf, bwall, bslot, bsql = run_query(client, _q2_sql_for_external(f"{DATASET}.IMAGES"))
-        bres_ids = set(int(x) for x in bdf["id"])
-        bp, br, b_f1 = f1_set(bres_ids, gt_ids)
-        bcalls = n_total
-        bcost = per_row * bcalls
-        print(f"  returned {len(bres_ids)} ids; P={bp:.4f} R={br:.4f} F1={b_f1:.4f}")
-        print(f"  wall={bwall:.2f}s slot={bslot} cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/q2.sql verbatim on IMAGES", "sql": bsql,
-            "result_ids": sorted(list(bres_ids)),
-            "score": {"precision": bp, "recall": br, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "n_llm_calls_method": "scope size",
-                               "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     # ── Cascade Stage 1+2 via AiIfVerifier ──
     verifier = make_q2_verifier()
@@ -292,30 +259,9 @@ def main():
             "cost_usd": vres.cost_usd, "n_llm_calls": vres.n_calls,
         },
     }
-    paper_n_calls = round(PAPER_BQ_Q2["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q2["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q2["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q2["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q2["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q2["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q2["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": vres.cost_usd},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": vres.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Ecomm Q2",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("F1",         [PAPER_BQ_Q2["score_f1"], PAPER_DASE_NN_Q2["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q2["latency_s"], PAPER_DASE_NN_Q2["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q2["cost_usd"], PAPER_DASE_NN_Q2["cost_usd"], bcost, vres.cost_usd], ".4f"),
-            ("#LLM calls", [paper_n_calls, 0, bcalls, vres.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

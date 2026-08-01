@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    relative_error_score, build_profile, write_profile, print_summary,
+    relative_error_score, build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -50,9 +50,6 @@ NEGATIVE = [
 ]
 
 ALPHA = 0.2
-PAPER_BQ_Q2 = {"score": 0.19, "latency_s": 9.4, "cost_usd": 0.01}
-PAPER_DASE_NN_Q2 = {"score": 0.83, "latency_s": 5e-4, "cost_usd": 1e-9}
-SKIP_BASELINE = False
 
 
 def make_elephant_audio_verifier():
@@ -86,16 +83,6 @@ def make_elephant_audio_verifier():
     )
 
 
-def run_baseline(client):
-    """Verbatim sembench Q2.sql on the full audio_data_mm — returns elephant count."""
-    sql = f"""
-    SELECT COUNT(*) AS count
-    FROM {DATASET}.audio_data_mm
-    WHERE AI.IF(prompt => ('{PROMPT}', audio),
-                connection_id => 'us.connection',
-                endpoint => 'gemini-2.5-flash')
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -158,30 +145,6 @@ def main():
         "n_confident_pos": n_confident_pos,
     }
 
-    # ── Baseline (verbatim sembench Q2.sql) ──
-    if SKIP_BASELINE:
-        b_score, bwall, bslot = PAPER_BQ_Q2["score"], PAPER_BQ_Q2["latency_s"], None
-        bcost, bcount = PAPER_BQ_Q2["cost_usd"], None
-        bcalls = round(bcost / per_row)
-        profile["baseline"] = {"_status": "aborted",
-                               "score": {"score": b_score, "_source": "paper"},
-                               "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                               "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"}}
-    else:
-        print(f"\n=== Baseline (sembench Q2.sql verbatim) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        bcount = int(bdf.iloc[0]["count"])
-        bcalls = n_total
-        bcost = per_row * bcalls
-        b_score = relative_error_score(bcount, n_gt)
-        print(f"  count={bcount} (GT={n_gt})")
-        print(f"  wall={bwall:.2f}s  slot={bslot}  calls={bcalls}  cost=${bcost:.6f}  score={b_score:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q2.sql verbatim on audio_data_mm", "sql": bsql,
-            "result_count": bcount, "score": {"score": b_score},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     profile["cascade"] = {
         "method": "F-cascade with COUNT aggregation: Cascade(MarginSignal, AlphaBand, AiIfVerifier).run()",
@@ -194,26 +157,9 @@ def main():
                    "n_llm_calls": cres.verifier_result.n_calls},
     }
 
-    profile["comparison"] = {
-        "score":       {"paper_BQ": PAPER_BQ_Q2["score"],   "paper_DASE_NN": PAPER_DASE_NN_Q2["score"],   "ours_BQ": b_score, "ours_cascade": cscore},
-        "wall_s":      {"paper_BQ": PAPER_BQ_Q2["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q2["latency_s"], "ours_BQ": bwall,  "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": PAPER_BQ_Q2["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q2["cost_usd"], "ours_BQ": bcost,    "ours_cascade": cres.verifier_result.cost_usd},
-        "n_llm_calls": {"paper_BQ": round(PAPER_BQ_Q2["cost_usd"] / per_row), "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": cres.verifier_result.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q2 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score",      [PAPER_BQ_Q2["score"], PAPER_DASE_NN_Q2["score"], b_score, cscore], ".2f"),
-            ("count",      [None, None, bcount, cascade_count]),
-            ("wall (s)",   [PAPER_BQ_Q2["latency_s"], PAPER_DASE_NN_Q2["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q2["cost_usd"], PAPER_DASE_NN_Q2["cost_usd"], bcost, cres.verifier_result.cost_usd], ".4f"),
-            ("#LLM calls", [round(PAPER_BQ_Q2["cost_usd"] / per_row), 0, bcalls, cres.verifier_result.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

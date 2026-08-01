@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -50,9 +50,6 @@ NEGATIVE = [
 ]
 
 ALPHA = 0.2
-PAPER_BQ_Q4 = {"score": 1.00, "latency_s": 9.4, "cost_usd": 0.01}
-PAPER_DASE_NN_Q4 = {"score": 1.00, "latency_s": 8e-4, "cost_usd": 1e-9}
-SKIP_BASELINE = False
 
 
 def make_elephant_verifier():
@@ -80,19 +77,6 @@ def make_elephant_verifier():
     )
 
 
-def run_baseline(client):
-    """Verbatim sembench Q4.sql on full audio_data_mm — argmax city."""
-    sql = f"""
-    SELECT City AS city
-    FROM {DATASET}.audio_data_mm
-    WHERE AI.IF(prompt => ('{PROMPT}', audio),
-                connection_id => 'us.connection',
-                endpoint => 'gemini-2.5-flash')
-    GROUP BY City
-    ORDER BY COUNT(*) DESC
-    LIMIT 1
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -158,28 +142,6 @@ def main():
     profile["dase_partition"] = {"n_uncertain": n_uncertain,
                                  "dase_confident_pos_by_city": dase_confident_pos_by_city}
 
-    if SKIP_BASELINE:
-        bcost = PAPER_BQ_Q4["cost_usd"]; bwall = PAPER_BQ_Q4["latency_s"]; bslot = None
-        bcity = None; b_score = PAPER_BQ_Q4["score"]; bcalls = round(bcost / per_row)
-        profile["baseline"] = {"_status": "aborted",
-                                "score": {"score": b_score, "_source": "paper"},
-                                "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                                "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost, "_source": "paper"}}
-    else:
-        print(f"\n=== Baseline (sembench Q4.sql verbatim) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        bcity = bdf.iloc[0]["city"] if len(bdf) > 0 else None
-        bcalls = n_total
-        bcost = per_row * bcalls
-        b_score = 1.0 if bcity in gt_cities else 0.0
-        print(f"  baseline city: {bcity}  (GT cities: {gt_cities})  score={b_score:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q4.sql verbatim on audio_data_mm",
-            "sql": bsql, "result_city": str(bcity),
-            "score": {"score": b_score, "in_gt": bcity in gt_cities},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     total_by_city = dict(dase_confident_pos_by_city)
     for city, n in bq_pos_by_city.items():
@@ -207,26 +169,9 @@ def main():
                    "cost_usd": cres.verifier_result.cost_usd, "n_llm_calls": cres.verifier_result.n_calls},
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q4["score"], "paper_DASE_NN": PAPER_DASE_NN_Q4["score"], "ours_BQ": b_score, "ours_cascade": cscore},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q4["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q4["latency_s"], "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q4["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q4["cost_usd"], "ours_BQ": bcost, "ours_cascade": cres.verifier_result.cost_usd},
-        "n_llm_calls": {"paper_BQ": round(PAPER_BQ_Q4["cost_usd"] / per_row), "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": cres.verifier_result.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q4 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score",     [PAPER_BQ_Q4["score"], PAPER_DASE_NN_Q4["score"], b_score, cscore], ".2f"),
-            ("city",      [None, None, str(bcity) if bcity is not None else None, str(cascade_city) if cascade_city is not None else None]),
-            ("wall (s)",  [PAPER_BQ_Q4["latency_s"], PAPER_DASE_NN_Q4["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",  [PAPER_BQ_Q4["cost_usd"], PAPER_DASE_NN_Q4["cost_usd"], bcost, cres.verifier_result.cost_usd], ".4f"),
-            ("#LLM calls",[round(PAPER_BQ_Q4["cost_usd"] / per_row), 0, bcalls, cres.verifier_result.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

@@ -19,14 +19,14 @@ import pandas as pd
 
 # Bootstrap sys.path so `import dase_cascade` (which lives at
 # sembench_data/dase_cascade/) resolves; the package then patches sys.path
-# further to expose `tools.llm_tool` at the dase_clean root.
+# further to expose `tools.llm_tool` at the DASE repository root.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -68,9 +68,6 @@ AUD_NEGATIVE = [
 ]
 
 ALPHA = 0.2
-PAPER_BQ_Q5 = {"score": 0.75, "latency_s": 19.2, "cost_usd": 0.12}
-PAPER_DASE_NN_Q5 = {"score": 1.00, "latency_s": 1e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = False
 
 
 # ─── Side-specific BQ verifier setup ─────────────────────────────────────
@@ -130,17 +127,6 @@ def _uri_array_literal(uris):
     return f"[{items}]"
 
 
-def run_baseline(client):
-    sql = f"""
-    SELECT DISTINCT city FROM (
-      SELECT City AS city FROM {DATASET}.image_data_mm
-      WHERE AI.IF(('{IMG_PROMPT}', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-      UNION ALL
-      SELECT City AS city FROM {DATASET}.audio_data_mm
-      WHERE AI.IF(('{AUD_PROMPT}', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-    )
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -219,32 +205,6 @@ def main():
                   "confident_pos_cities": sorted(aud_confident_cities)},
     }
 
-    # ── Baseline (verbatim sembench Q5.sql) ──
-    if SKIP_BASELINE:
-        b_score, bwall, bslot = PAPER_BQ_Q5["score"], PAPER_BQ_Q5["latency_s"], None
-        bcost = PAPER_BQ_Q5["cost_usd"]; b_cities = None
-        bcalls_total = round(bcost / ((img_cal.per_row_cost_usd + aud_cal.per_row_cost_usd) / 2))
-        profile["baseline"] = {"_status": "aborted", "score": {"f1": b_score, "_source": "paper"},
-                               "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                               "cost_breakdown": {"total_cost_usd": bcost, "_source": "paper"}}
-    else:
-        print(f"\n=== Baseline (sembench Q5.sql verbatim) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_cities = set(bdf["city"])
-        bcalls_total = n_img + n_aud
-        bcost = img_cal.per_row_cost_usd * n_img + aud_cal.per_row_cost_usd * n_aud
-        _, _, b_score = f1_set(b_cities, gt_cities)
-        print(f"  cities={sorted(b_cities)} (GT={sorted(gt_cities)})")
-        print(f"  wall={bwall:.2f}s, slot={bslot}, calls={bcalls_total}, cost=${bcost:.6f}, F1={b_score:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q5.sql verbatim", "sql": bsql,
-            "result_cities": sorted(b_cities), "score": {"f1": b_score},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls_total,
-                               "img_per_row": img_cal.per_row_cost_usd,
-                               "aud_per_row": aud_cal.per_row_cost_usd,
-                               "total_cost_usd": bcost},
-        }
 
     # ── BQ stage for both modalities (via verifiers) ──
     print(f"\n=== Cascade BQ stages: 2 CTAS + 2 AI.IF ===")
@@ -278,27 +238,9 @@ def main():
                    "cost_usd": cascade_cost, "n_llm_calls": s2_calls},
     }
 
-    profile["comparison"] = {
-        "score":       {"paper_BQ": PAPER_BQ_Q5["score"],   "paper_DASE_NN": PAPER_DASE_NN_Q5["score"],   "ours_BQ": b_score, "ours_cascade": cscore},
-        "wall_s":      {"paper_BQ": PAPER_BQ_Q5["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q5["latency_s"], "ours_BQ": bwall,   "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": PAPER_BQ_Q5["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q5["cost_usd"], "ours_BQ": bcost,    "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": round(PAPER_BQ_Q5["cost_usd"] / ((img_cal.per_row_cost_usd + aud_cal.per_row_cost_usd) / 2)),
-                        "paper_DASE_NN": 0, "ours_BQ": bcalls_total, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q5 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q5["score"], PAPER_DASE_NN_Q5["score"], b_score, cscore], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q5["latency_s"], PAPER_DASE_NN_Q5["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q5["cost_usd"], PAPER_DASE_NN_Q5["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [round(PAPER_BQ_Q5["cost_usd"] / ((img_cal.per_row_cost_usd + aud_cal.per_row_cost_usd) / 2)),
-                            0, bcalls_total, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

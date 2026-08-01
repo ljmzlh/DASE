@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    relative_error_score, build_profile, write_profile, print_summary,
+    relative_error_score, build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -50,8 +50,6 @@ NEGATIVE = [
 ]
 
 ALPHA = 0.2
-PAPER_BQ_Q1 = {"score": 0.79, "latency_s": 32.0, "cost_usd": 0.11}
-SKIP_BASELINE = False
 
 
 def make_zebra_verifier():
@@ -87,16 +85,6 @@ def make_zebra_verifier():
     )
 
 
-def run_baseline(client):
-    """Verbatim sembench Q1.sql on the full image_data_mm — returns ZEBRA count."""
-    sql = f"""
-    SELECT COUNT(*) AS count
-    FROM {DATASET}.image_data_mm
-    WHERE AI.IF(('{PROMPT}', image),
-                connection_id => 'us.connection',
-                endpoint => 'gemini-2.5-flash')
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -161,30 +149,6 @@ def main():
         "n_confident_pos": n_confident_pos,
     }
 
-    # ── Baseline (verbatim sembench Q1.sql) ──
-    if SKIP_BASELINE:
-        b_score, bwall, bslot = PAPER_BQ_Q1["score"], PAPER_BQ_Q1["latency_s"], None
-        bcost, bcount = PAPER_BQ_Q1["cost_usd"], None
-        bcalls = round(bcost / per_row)
-        profile["baseline"] = {"_status": "aborted",
-                               "score": {"score": b_score, "_source": "paper"},
-                               "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                               "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"}}
-    else:
-        print(f"\n=== Baseline (sembench Q1.sql verbatim) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        bcount = int(bdf.iloc[0]["count"])
-        bcalls = n_total
-        bcost = per_row * bcalls
-        b_score = relative_error_score(bcount, n_gt)
-        print(f"  count={bcount} (GT={n_gt})")
-        print(f"  wall={bwall:.2f}s  slot={bslot}  calls={bcalls}  cost=${bcost:.6f}  score={b_score:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q1.sql verbatim on image_data_mm", "sql": bsql,
-            "result_count": bcount, "score": {"score": b_score},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     profile["cascade"] = {
         "method": "F-cascade with COUNT aggregation: Cascade(MarginSignal, AlphaBand, AiIfVerifier).run()",
@@ -197,26 +161,9 @@ def main():
                    "n_llm_calls": cres.verifier_result.n_calls},
     }
 
-    profile["comparison"] = {
-        "score":       {"paper": PAPER_BQ_Q1["score"],   "baseline": b_score, "cascade": cscore},
-        "wall_s":      {"paper": PAPER_BQ_Q1["latency_s"], "baseline": bwall,  "cascade_total": cascade_total_wall},
-        "cost_usd":    {"paper": PAPER_BQ_Q1["cost_usd"], "baseline": bcost,  "cascade": cres.verifier_result.cost_usd},
-        "n_llm_calls": {"baseline": bcalls, "cascade": cres.verifier_result.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q1 (alpha={ALPHA})",
-        columns=["paper Tbl4c", "baseline", "cascade"],
-        rows=[
-            ("score",      [PAPER_BQ_Q1["score"], b_score, cscore], ".2f"),
-            ("count",      [None, bcount, cascade_count]),
-            ("wall (s)",   [PAPER_BQ_Q1["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q1["cost_usd"], bcost, cres.verifier_result.cost_usd], ".4f"),
-            ("#LLM calls", [None, bcalls, cres.verifier_result.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

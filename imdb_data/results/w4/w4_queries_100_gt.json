@@ -1,5 +1,5 @@
 {
-  "baseline": "ground_truth",
+  "method": "ground_truth",
   "workload_path": "imdb_data/workload/w4/w4_queries_100.json",
   "n_queries": 100,
   "results": [

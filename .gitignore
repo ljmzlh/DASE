@@ -44,9 +44,21 @@ pgvector/sql/vector--0.8.5.sql
 /sembench_data/movie/data/
 /sembench_data/movie/cache/
 /sembench_data/movie/gt_Q10.csv
-/sembench_data/movie/lotus_Q10.csv
-/sembench_data/movie/lotus_Q9.csv
 /sembench_data/movie/Q3.csv
 
 # Backup of pre-publish git history (do NOT commit)
 .git.bak/
+
+# Experiment outputs and local NFCorpus exports
+/results/
+/nfcorpus_data/psql/
+/imdb_data/logs/
+/molecule_data/logs/
+/imdb_data/results/**/results_*.json
+/molecule_data/results/**/results_*.json
+/imdb_data/results/**/*.ipynb
+/molecule_data/results/**/*.ipynb
+/sembench_data/*/outputs/Q*.json
+/sembench_data/*/outputs/cascade_summary.csv
+*.pkl
+*.npz

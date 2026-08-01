@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -64,9 +64,6 @@ AUD_NEGATIVE = [
 ]
 
 ALPHA = 0.5
-PAPER_BQ_Q9 = {"score": 0.59, "latency_s": 37.6, "cost_usd": 0.12}
-PAPER_DASE_NN_Q9 = {"score": 0.00, "latency_s": 1e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = False
 
 
 def _uri_array_literal(uris):
@@ -116,19 +113,6 @@ def make_audio_verifier(uncertain_uris):
     )
 
 
-def run_baseline(client):
-    sql = f"""
-    SELECT DISTINCT City AS city FROM (
-        SELECT City
-        FROM {DATASET}.image_data_mm
-        WHERE AI.IF(('{IMG_PROMPT}', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-    ) INTERSECT DISTINCT (
-        SELECT City
-        FROM {DATASET}.audio_data_mm
-        WHERE AI.IF(('{AUD_PROMPT}', audio), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-    )
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -199,30 +183,6 @@ def main():
         "dase_audio_monkey_cities": sorted(dase_aud_monkey_cities),
     }
 
-    if SKIP_BASELINE:
-        b_score = PAPER_BQ_Q9["score"]; bwall = PAPER_BQ_Q9["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q9["cost_usd"]
-        bcalls_total = round(bcost / ((img_cal.per_row_cost_usd + aud_cal.per_row_cost_usd) / 2))
-        b_cities = None
-        profile["baseline"] = {"_status": "aborted", "score": {"score": b_score, "_source": "paper"},
-                                "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                                "cost_breakdown": {"n_llm_calls": bcalls_total, "total_cost_usd": bcost, "_source": "paper"}}
-    else:
-        print(f"\n=== Baseline (sembench Q9.sql verbatim, INTERSECT) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_cities = set(bdf["city"])
-        bcalls_total = n_img + n_aud
-        bcost = img_cal.per_row_cost_usd * n_img + aud_cal.per_row_cost_usd * n_aud
-        _, _, b_score = f1_set(b_cities, gt_cities)
-        print(f"  baseline cities: {sorted(b_cities)} (GT: {sorted(gt_cities)})  F1={b_score:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q9.sql verbatim with INTERSECT",
-            "sql": bsql, "result_cities": sorted(b_cities),
-            "score": {"f1": b_score},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls_total, "img_per_row": img_cal.per_row_cost_usd,
-                               "aud_per_row": aud_cal.per_row_cost_usd, "total_cost_usd": bcost},
-        }
 
     # ── BQ stage for both modalities ──
     print(f"\n=== Cascade BQ stages: 2 CTAS + 2 AI.IF ===")
@@ -253,27 +213,9 @@ def main():
                    "cost_usd": cascade_cost, "n_llm_calls": s2_calls},
     }
 
-    profile["comparison"] = {
-        "score":       {"paper_BQ": PAPER_BQ_Q9["score"], "paper_DASE_NN": PAPER_DASE_NN_Q9["score"], "ours_BQ": b_score, "ours_cascade": cscore},
-        "wall_s":      {"paper_BQ": PAPER_BQ_Q9["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q9["latency_s"], "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": PAPER_BQ_Q9["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q9["cost_usd"], "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": round(PAPER_BQ_Q9["cost_usd"] / ((img_cal.per_row_cost_usd + aud_cal.per_row_cost_usd) / 2)),
-                        "paper_DASE_NN": 0, "ours_BQ": bcalls_total, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q9 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q9["score"], PAPER_DASE_NN_Q9["score"], b_score, cscore], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q9["latency_s"], PAPER_DASE_NN_Q9["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q9["cost_usd"], PAPER_DASE_NN_Q9["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [round(PAPER_BQ_Q9["cost_usd"] / ((img_cal.per_row_cost_usd + aud_cal.per_row_cost_usd) / 2)),
-                            0, bcalls_total, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

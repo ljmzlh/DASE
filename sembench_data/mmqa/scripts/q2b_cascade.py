@@ -42,7 +42,7 @@ from generic_evaluator import GenericEvaluator  # noqa: E402
 from dase_cascade import (  # noqa: E402
     MarginSignal, PairCosineSignal, AiIfVerifier, AiGenerateVerifier,
     embed_query, bq_client, per_row_cost, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 
 MMQA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -71,9 +71,6 @@ TRACK_GAP = 0.10
 # Stage B — color extraction
 COLOR_PROMPT = "What is the dominant color of the logo in this image? Only respond with the color name."
 
-PAPER_BQ_Q2b = {"score": None, "latency_s": None, "cost_usd": None}  # TBD
-PAPER_DASE_NN_Q2b = {"score": None, "latency_s": 1e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = True
 
 
 def make_stage_a_verifier():
@@ -290,19 +287,6 @@ def main():
     cascade_wall = vres_a.ctas_wall_s + vres_a.wall_s + vres_b.wall_s
     cascade_slot = vres_a.ctas_slot_ms + vres_a.slot_ms + vres_b.slot_ms
 
-    if SKIP_BASELINE:
-        bcost = (PAPER_BQ_Q2b["cost_usd"] if PAPER_BQ_Q2b["cost_usd"] is not None
-                 else per_pair_cost * (n_pairs + 5))  # 1200 AI.IF + 5 AI.GENERATE
-        bwall = PAPER_BQ_Q2b["latency_s"]
-        bscore = PAPER_BQ_Q2b["score"]
-        bcalls = n_pairs + 5
-        profile["baseline"] = {
-            "_status": "skipped (1200 cross-join AI.IF + 5 AI.GENERATE)",
-            "score": {"f1": bscore, "_source": "paper Table 4 (TBD mapping)"},
-            "latency_breakdown": {"wall_s": bwall},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_pair_cost_usd": per_pair_cost,
-                                "total_cost_usd": bcost, "_source": "estimated"},
-        }
 
     profile["cascade"] = {
         "method": "Stage A J cascade (MarginSignal+PairCosineSignal+AiIfVerifier) + Stage B M cascade (image-cluster + AiGenerateVerifier color)",
@@ -321,28 +305,9 @@ def main():
                                               "stage_b_aigen": n_calls_stage_b}},
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q2b["score"], "paper_DASE_NN": PAPER_DASE_NN_Q2b["score"],
-                   "ours_BQ": bscore, "ours_cascade": cscore.f1_score},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q2b["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q2b["latency_s"],
-                    "ours_BQ": bwall, "ours_cascade": cascade_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q2b["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q2b["cost_usd"],
-                      "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": n_pairs + 5, "paper_DASE_NN": 0,
-                         "ours_BQ": bcalls, "ours_cascade": n_calls_stage_a + n_calls_stage_b},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        "MMQA Q2b",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q2b["score"], PAPER_DASE_NN_Q2b["score"], bscore, cscore.f1_score], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q2b["cost_usd"], PAPER_DASE_NN_Q2b["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [n_pairs + 5, 0, bcalls, n_calls_stage_a + n_calls_stage_b], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ Ecomm Q10 cascade — 3-way join (shoe + lower + upper, same color+brand).
 
 NL: matching outfits with shared brand+color, each ≤ 1000 INR, in 4 base colors.
 GT: SF=500 → 8 GT triples.
-BQ template baseline: 113³ × 5 AI.IF = 7M calls — INFEASIBLE.
+The unfiltered BQ template would require 113³ × 5 AI.IF calls, so DASE prunes each stage.
 
 Refactored. Operator (paper Table 3): J (multi-way semantic join). Composes:
 
@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, RoleMarginSignal, AbsoluteBand, PairCosineSignal,
     AiIfVerifier, bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost          # for pair calibration
 from google.cloud import bigquery
@@ -54,7 +54,6 @@ TAU_HIGH = 0.05
 TAU_LOW = -0.02
 PAIR_TAU_LOW = 0.75
 STAGE3_BATCH = 300
-PAPER_DASE_NN_Q10 = {"score_f1": None, "latency_s": 0.7, "cost_usd": 1e-5}
 
 # Verbatim sembench BQ template prompts
 SHOE_PROMPT = (
@@ -397,10 +396,6 @@ def main():
         sum(s1_slots.values()) + ctas_sl_slot + ctas_lu_slot + sl_slot + lu_slot
     )
 
-    profile["baseline"] = {
-        "_status": "aborted",
-        "_status_note": "BQ template = 113³×5 AI.IF = 7M calls; infeasible. paper Q10 reports X.",
-    }
     profile["cascade"] = {
         "method": "Stage0 RoleMarginSignal+AbsoluteBand → Stage1 unary AI.IF → Stage2 PairCosineSignal → Stage3 pair AI.IF → Stage4 triple assemble",
         "stage1_unary_walls_s": s1_walls, "stage1_unary_slots_ms": s1_slots,
@@ -422,25 +417,9 @@ def main():
             "n_llm_calls_breakdown": {"stage1_unary": s1_calls_total, "stage3_pair": s3_total_calls},
         },
     }
-    profile["comparison"] = {
-        "score":       {"paper_BQ": None, "paper_DASE_NN": None, "ours_cascade": c_f1},
-        "wall_s":      {"paper_BQ": None, "paper_DASE_NN": PAPER_DASE_NN_Q10["latency_s"], "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": None, "paper_DASE_NN": PAPER_DASE_NN_Q10["cost_usd"], "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": None, "paper_DASE_NN": 0, "ours_cascade": s1_calls_total + s3_total_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        "Ecomm Q10 (J: 3-way join cascade)",
-        columns=["paper BQ", "DASE+NN", "ours cascade"],
-        rows=[
-            ("F1",         [None, None, c_f1], ".2f"),
-            ("wall (s)",   [None, PAPER_DASE_NN_Q10["latency_s"], cascade_total_wall], ".2f"),
-            ("cost ($)",   [None, PAPER_DASE_NN_Q10["cost_usd"], cascade_cost], ".4f"),
-            ("#LLM calls", [None, 0, s1_calls_total + s3_total_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

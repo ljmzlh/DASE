@@ -26,14 +26,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     AbsoluteBand, AiGenerateVerifier,
     bq_client, embed_query, per_row_cost, run_query,
-    ari_score, build_profile, write_profile, print_summary, cosine_sim_batch,
+    ari_score, build_profile, write_profile, cosine_sim_batch,
 )
 
 ECOMM_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 IMAGES_PARQUET = os.path.join(ECOMM_DIR, "data", "products_image.parquet")
 STYLES_PARQUET = os.path.join(ECOMM_DIR, "cache", "sf_500", "styles_details.parquet")
 PROFILE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q4.json")
-BASELINE_CACHE = os.path.join(ECOMM_DIR, "outputs", "Q4_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 DATASET = "fashion_product_images"
@@ -51,8 +50,6 @@ COLOR_ANCHORS = {
 }
 
 TAU_HIGH = 0.05
-PAPER_BQ_Q4 = {"score_ari": 0.69, "latency_s": 31.0, "cost_usd": 0.37}
-SKIP_BASELINE = False
 
 
 def _q4_sql_for(table: str) -> str:
@@ -177,56 +174,6 @@ def main():
         "_caveat": "Q4 uses AI.GENERATE (free-form color string); per-row cost dominated by image input + ~3-token output. Proxy is close.",
     }
 
-    # Baseline
-    if SKIP_BASELINE:
-        b_ari = PAPER_BQ_Q4["score_ari"]; bwall = PAPER_BQ_Q4["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q4["cost_usd"]; bcalls = n_total
-        bres = {}
-        profile["baseline"] = {"_status": "aborted", "method": "...",
-            "score": {"ari": b_ari, "_source": "paper"},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": None, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row,
-                               "total_cost_usd": bcost, "_source": "paper"}}
-    elif os.path.exists(BASELINE_CACHE):
-        print(f"\n=== Baseline (cached from {BASELINE_CACHE}) ===")
-        with open(BASELINE_CACHE) as f:
-            cache = json.load(f)
-        bres = {int(k): v for k, v in cache["bres"].items()}
-        bwall, bslot, b_ari, bcalls = cache["wall_s"], cache["slot_ms"], cache["ari"], cache["n_calls"]
-        bcost = per_row * bcalls
-        print(f"  cached: returned {len(bres)} (id, color); ARI={b_ari:.4f}, "
-              f"wall={bwall:.2f}s, cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/q4.sql verbatim — CACHED", "_cache_source": BASELINE_CACHE,
-            "sql": _q4_sql_for(f"{DATASET}.STYLES_DETAILS").strip(),
-            "score": {"ari": float(b_ari)},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row,
-                               "total_cost_usd": bcost},
-        }
-    else:
-        print("\n=== Baseline (sembench q4.sql verbatim on STYLES_DETAILS) ===")
-        bdf, bwall, bslot, bsql = run_query(client, _q4_sql_for(f"{DATASET}.STYLES_DETAILS"))
-        bres = {int(row["id"]): str(row["category"]).strip() for _, row in bdf.iterrows()}
-        ids_sorted = sorted(bres.keys() & gt_map.keys())
-        b_ari = ari_score([bres[i] for i in ids_sorted], [gt_map[i] for i in ids_sorted])
-        bcalls = n_total
-        bcost = per_row * bcalls
-        print(f"  returned {len(bres)} (id, color); ARI={b_ari:.4f}; "
-              f"wall={bwall:.2f}s slot={bslot}; cost=${bcost:.6f}")
-        with open(BASELINE_CACHE, "w") as f:
-            json.dump({
-                "bres": {str(k): v for k, v in bres.items()},
-                "wall_s": bwall, "slot_ms": bslot, "ari": float(b_ari), "n_calls": bcalls,
-                "_note": "Cached BQ baseline output. Delete to force re-run.",
-            }, f, indent=2)
-        profile["baseline"] = {
-            "method": "sembench bigquery/q4.sql verbatim", "sql": bsql,
-            "score": {"ari": float(b_ari)},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row,
-                               "total_cost_usd": bcost},
-        }
 
     # ── Cascade verifier on uncertain ──
     print(f"\n=== Cascade: AiGenerateVerifier on {len(uncertain_ids)} uncertain ids ===")
@@ -265,30 +212,9 @@ def main():
             "cost_usd": vres.cost_usd, "n_llm_calls": vres.n_calls,
         },
     }
-    paper_n_calls = round(PAPER_BQ_Q4["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q4["score_ari"], "paper_DASE_NN": None,
-                  "ours_BQ": float(b_ari), "ours_cascade": float(c_ari)},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q4["latency_s"], "paper_DASE_NN": None,
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q4["cost_usd"], "paper_DASE_NN": None,
-                     "ours_BQ": bcost, "ours_cascade": vres.cost_usd},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": vres.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Ecomm Q4",
-        columns=["paper BQ", "ours BQ", "ours cascade"],
-        rows=[
-            ("ARI",        [PAPER_BQ_Q4["score_ari"], b_ari, c_ari], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q4["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q4["cost_usd"], bcost, vres.cost_usd], ".4f"),
-            ("#LLM calls", [paper_n_calls, bcalls, vres.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

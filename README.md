@@ -9,7 +9,11 @@ DASE jointly executes multi-attribute filtering, multi-vector similarity scoring
 - **FSS** (Filtered-Score Streamer) — single-signal sorted stream with predicate-aware ANN traversal.
 - **Predicate-aware HNSW** — a pgvector fork that adds a filtered-HNSW operator (`<->#`) and 2-hop GUC, used by FSS to walk an HNSW graph under a row-level bitmap.
 
-Paper: *Efficiently Linking Unstructured Data for Multi-step Reasoning* (VLDB).
+Paper: *Efficiently Linking Unstructured Data for Multi-step Reasoning* (SIGMOD '27 submission).
+
+This submission repository contains only the DASE implementation, its pgvector
+extensions, workloads, ground truth, and DASE-specific experiments and
+ablations.
 
 ---
 
@@ -56,12 +60,17 @@ If `<->#` is missing, the standard pgvector got installed instead — uninstall 
 
 ## 2. Set up data
 
-All data lives at the public HF dataset [`dasepaper/dase_data`](https://huggingface.co/datasets/dasepaper/dase_data). One script handles download, psql tables (with HNSW indexes + `<table>_id_map` lookups for filtered HNSW), and BigQuery setup.
+IMDB, MOLECULE, and SemBench data live at the public HF dataset
+[`dasepaper/dase_data`](https://huggingface.co/datasets/dasepaper/dase_data).
+`setup_data.py` handles their download, PostgreSQL setup, SemJI construction,
+and optional BigQuery setup. NFCorpus uses three separate parquet exports and
+is loaded only when `--nfcorpus-parquet-dir` is supplied.
 
 ```bash
 # (optional) override defaults — env vars also read by ours/sys.py
 export IMDB_DATABASE_URL=postgresql://user:pw@host:5432/imdb
 export MOLECULE_DATABASE_URL=postgresql://user:pw@host:5432/molecule
+export NFCORPUS_DATABASE_URL=postgresql://user:pw@host:5432/nfcorpus
 
 # (BigQuery only) upstream sembench checkout + GCP creds
 export SEMBENCH_SRC=/path/to/sembench/src
@@ -75,12 +84,17 @@ python setup_data.py --skip-bq
 
 # Just download
 python setup_data.py --skip-psql --skip-bq
+
+# Add NFCorpus after obtaining its three parquet exports
+python setup_data.py --skip-download --skip-bq --psql-dbs '' \
+	--nfcorpus-parquet-dir /path/to/nfcorpus-parquets
 ```
 
 `setup_data.py` does, in order:
 1. Pull HF dataset → `psql_dump/` (parquets) + `sembench_data/<scenario>/`.
 2. `CREATE DATABASE imdb` and `CREATE DATABASE molecule`; `CREATE EXTENSION vector`; `CREATE TABLE` + `COPY` parquet rows; build btree/gin/HNSW indexes; build `<table>_id_map` lookup tables for the four `*_hnsw` base tables. Then build the SemJI / TI tables (`ti_imdb_t1_imdb_t2_{0.5,0.6}`, `ti_facts_50k_paper_{0.5,0.6,0.7}`) — these back W5–W8 cross-table joins. The molecule τ=0.7 TI is ~50 GB and slow; pass `--skip-ti` to skip if you only need W1–W4.
-3. Run scenario `setup_bq.py` for `wildlife / mmqa / cars` (the other two cascade scenarios create BQ tables on first run).
+3. If requested, load NFCorpus's paper table and two real link relations.
+4. Run scenario `setup_bq.py` for `wildlife / mmqa / cars` (the other two cascade scenarios create BQ tables on first run).
 
 For all flags, see `python setup_data.py --help`.
 
@@ -90,7 +104,7 @@ For all flags, see `python setup_data.py --help`.
 
 ### 3.1 IMDB / MOLECULE (DASE workloads)
 
-Eight workload classes (paper Table 1):
+Eight workload classes (paper Table 2):
 
 | WL | 𝒫 (predicates) | Multi-S | 𝒥 (join) | Pattern | Expression |
 |---|---|---|---|---|---|
@@ -122,21 +136,28 @@ python -m ours.sys imdb_data/workload/w7/w7_queries_100.json --limit 10
 **Output paths**:
 - Per-run results JSON → `<scenario>_data/results/wX/results_dase_wX_queries_100_<run_id>.json`
 - Setting snapshot → `<scenario>_data/logs/<run_id>.setting.json`
-- Pre-existing run artefacts checked into the repo: `<scenario>_data/results/wX/2026XXXX_XXXXXX.json`
 - Ground-truth queries: `<scenario>_data/results/wX/wX_queries_100_gt.json`
 
-**Eval notebooks** — one per (scenario, workload), alongside the result JSONs:
+Generated results and logs are intentionally not tracked.
 
-```
-imdb_data/results/wX/eval_wX_results.ipynb
-molecule_data/results/wX/eval_wX_results.ipynb
-```
+### 3.2 DASE experiments and ablations
 
-Each notebook reads the GT file + the latest results JSON in the same directory and reports recall / QPS as in paper Table 2.
+| Paper result | Entry point |
+|---|---|
+| Table 4, SemJI construction | `python -m experiments.semji_construction --help` |
+| Table 5, predicate-aware HNSW | `python -m experiments.filtered_search --help` |
+| Table 6, SemJI ablation | `python -m experiments.ablate_semji --help` |
+| Table 6, stream selection | `python -m experiments.ablate_stream_selection --help` |
+| Figure 7, SemJI evolution | `python -m experiments.semji_evolution --help` |
+| Figure 8, DASE depth scaling | `python -m experiments.nfcorpus_depth --help` |
+| Table 7, anisotropy robustness | `python -m experiments.semji_robustness --help` |
+
+The Figure 8 entry point contains only the DASE directed-edge top-*n* dynamic
+program.
 
 ---
 
-### 3.2 SemBench cascade
+### 3.3 SemBench cascade
 
 DASE acts as a high-recall **prefilter** for BigQuery's semantic operators (`AI.IF`, `AI.CLASSIFY`, `AI.SCORE`, `AI.GENERATE`). Five scenarios from the upstream SemBench benchmark: `wildlife`, `mmqa`, `ecomm`, `cars`, `movie`. Each Q has two implementations:
 
@@ -144,7 +165,7 @@ DASE acts as a high-recall **prefilter** for BigQuery's semantic operators (`AI.
 - `qN_cascade.py` — DASE prefilter + BigQuery LLM stage; produces a profile JSON consumed by the per-scenario rollup.
 
 ```bash
-# wildlife Q1 — DASE-only baseline
+# wildlife Q1 — DASE-only embedding prefilter
 python sembench_data/wildlife/scripts/q1_nn.py
 
 # wildlife Q1 — DASE + BigQuery cascade
@@ -159,8 +180,8 @@ python sembench_data/mmqa/scripts/q3a_cascade.py
 
 **Output paths**:
 - Per-Q profile JSON → `sembench_data/<scenario>/outputs/QN.json`
-- BQ retry caches → `sembench_data/<scenario>/outputs/QN_baseline_cache.json`, `QN_stage1_cache.json`
-- All pre-existing runs are checked into the repo at the same paths.
+- DASE Stage-1 retry caches for E-Commerce Q10/Q11 → `sembench_data/ecomm/outputs/QN_stage1_cache.json`
+- Generated profiles, stage caches, and summaries are local artifacts and are ignored by Git.
 
 **Per-scenario rollup** — after all Qs in a scenario are done, build the summary:
 
@@ -172,4 +193,4 @@ python sembench_data/cars/build_cascade_summary.py
 python sembench_data/movie/build_cascade_summary.py
 ```
 
-Output: `sembench_data/<scenario>/outputs/cascade_summary.csv` — the canonical cost/quality/latency table per Q (matches paper Table 3 columns).
+Output: `sembench_data/<scenario>/outputs/cascade_summary.csv` — measured DASE score, latency, cost, verifier calls, and slot use per query.

@@ -71,6 +71,7 @@ _table_meta: Optional[Dict[str, Any]] = None
 _active_dataset: Optional[str] = None
 _table_size_cache: Dict[str, int] = {}
 _selectivity_cache: Dict[str, float] = {}  # key: "table|pred_fingerprint"
+_non_vec_cols_cache: Dict[str, str] = {}  # key: "table|kept vectors"
 
 
 def _load_table_meta(dataset: Optional[str] = None) -> Dict[str, Any]:
@@ -85,6 +86,7 @@ def _load_table_meta(dataset: Optional[str] = None) -> Dict[str, Any]:
         return _table_meta
     _table_size_cache.clear()
     _selectivity_cache.clear()
+    _non_vec_cols_cache.clear()
     _active_dataset = dataset
     import os, json
     meta_path = os.path.join(os.path.dirname(__file__), "..", f"{dataset}_data", "table_meta.json")
@@ -134,6 +136,7 @@ class FilteredScoreStreamer:
         keep_vec_cols: Optional[List[str]] = None,
         id_col: str = "id",
         text_col: str = "title",
+        hnsw_ef: Optional[int] = None,
     ):
         """
         Args:
@@ -178,6 +181,7 @@ class FilteredScoreStreamer:
         self._fss_pf = fss_pf
         self._id_col = id_col
         self._text_col = text_col
+        self._hnsw_ef = hnsw_ef
 
         self._sig_type = scoring_signal["type"]
 
@@ -274,13 +278,18 @@ class FilteredScoreStreamer:
         fss_cfg = (_table_meta or {}).get("fss_strategy", {})
         sigma_low = fss_cfg.get("sigma_low", SIGMA_LOW_DEFAULT)
         sigma_high = fss_cfg.get("sigma_high", SIGMA_HIGH_DEFAULT)
+        enable_predicate_aware = bool(fss_cfg.get("enable_predicate_aware", False))
 
         if self._sig_type == "semantic":
-            # W2-style binary dispatch at sigma_low:
+            # Predicate-aware traversal is explicitly gated because it requires
+            # the DASE pgvector fork and an id-map table.
             #   σ < sigma_low → native WHERE+ORDER BY (pgvector picks bitmap/HNSW iter)
-            #   σ ≥ sigma_low → HNSW scan + Python post-filter (score_first_hnsw)
+            #   sigma_low ≤ σ ≤ sigma_high → predicate-aware HNSW when enabled
+            #   σ > sigma_high → HNSW scan + Python post-filter
             if sigma < sigma_low:
                 self._strategy = "native_where_orderby"
+            elif enable_predicate_aware and sigma <= sigma_high:
+                self._strategy = "predicate_aware"
             else:
                 self._strategy = "score_first"
                 self._fetch_K = self._init_stream_fetchK or SCORE_FIRST_INIT
@@ -332,7 +341,7 @@ class FilteredScoreStreamer:
         id_in_sel = 1.0
 
         for p in self.predicates:
-            if p["operator"] == "in" and p["attribute"] == "id":
+            if p["operator"] == "in" and p["attribute"] == self._id_col:
                 id_in_sel *= len(p["value"]) / n
             else:
                 structural_preds.append(p)
@@ -440,6 +449,25 @@ class FilteredScoreStreamer:
         dispatch[self._strategy]()
         self.profile["fetch_n_batches"] += 1
 
+    def _resolve_non_vec_cols(self) -> str:
+        """Return the light-mode projection, cached across FSS instances."""
+        if self._non_vec_cols is not None:
+            return self._non_vec_cols
+        cache_key = f"{self.table}|{','.join(sorted(self._keep_vec_cols))}"
+        cached = _non_vec_cols_cache.get(cache_key)
+        if cached is None:
+            vector_cols = DATASET_VEC_COLS - self._keep_vec_cols
+            with self.conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+                    [self.table],
+                )
+                all_cols = [row[0] for row in cur.fetchall()]
+            cached = ", ".join(_quote(col) for col in all_cols if col not in vector_cols)
+            _non_vec_cols_cache[cache_key] = cached
+        self._non_vec_cols = cached
+        return cached
+
     # -- attribute_first: push predicates to SQL WHERE, ORDER BY score -
 
     def _fetch_attribute_first(self):
@@ -473,16 +501,7 @@ class FilteredScoreStreamer:
             # Exclude vector columns to avoid pulling large embeddings.
             # keep_vec_cols overrides exclusion for specific vectors (e.g. the
             # join embedding is needed downstream for cross-product distance).
-            if self._non_vec_cols is None:
-                _vec_cols = DATASET_VEC_COLS - self._keep_vec_cols
-                with self.conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
-                    cur.execute(
-                        "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
-                        [self.table],
-                    )
-                    all_cols = [r[0] for r in cur.fetchall()]
-                self._non_vec_cols = ", ".join(_quote(c) for c in all_cols if c not in _vec_cols)
-            select_expr = self._non_vec_cols
+            select_expr = self._resolve_non_vec_cols()
         else:
             select_expr = "*"
 
@@ -525,16 +544,7 @@ class FilteredScoreStreamer:
         params["off"] = self._offset
 
         if self._light_mode:
-            if self._non_vec_cols is None:
-                _vec_cols = DATASET_VEC_COLS - self._keep_vec_cols
-                with self.conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
-                    cur.execute(
-                        "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
-                        [self.table],
-                    )
-                    all_cols = [r[0] for r in cur.fetchall()]
-                self._non_vec_cols = ", ".join(_quote(c) for c in all_cols if c not in _vec_cols)
-            select_expr = self._non_vec_cols
+            select_expr = self._resolve_non_vec_cols()
         else:
             select_expr = "*"
 
@@ -547,8 +557,9 @@ class FilteredScoreStreamer:
         )
         t0 = _time.perf_counter()
         with self.conn.cursor(row_factory=dict_row) as cur:
-            # Hint HNSW ef_search in case planner picks iterative HNSW
-            ef = min(max(self._batch_size, self._query_k), HNSW_EF_SEARCH_MAX)
+            # Search effort is independent from the number of rows returned.
+            requested_ef = self._hnsw_ef if self._hnsw_ef is not None else self._batch_size
+            ef = min(max(requested_ef, self._query_k), HNSW_EF_SEARCH_MAX)
             cur.execute(f"SET LOCAL hnsw.ef_search = {ef}")
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -568,7 +579,7 @@ class FilteredScoreStreamer:
 
         params["lim"] = self._fetch_K
         if self._light_mode:
-            # Keep score_first close to rerank_w4: fetch only id/title/predicate cols.
+            # Fetch only ID, display, predicate, and explicitly retained vector columns.
             # keep_vec_cols lets the caller retain specific vector columns
             # (e.g., the W7 join embedding needed for cross-product distance).
             pred_cols = []
@@ -602,8 +613,12 @@ class FilteredScoreStreamer:
                     cur.execute(f"SET hnsw.ef_search = {ef}")
                 else:
                     # IVFFlat: n_probes = probe_rule(probe_size) * fss_pf
-                    from baselines import compute_ivfflat_probes, assert_ivfflat_exists
-                    probes = compute_ivfflat_probes(self._fetch_K, probe_factor=self._fss_pf)
+                    from ours.access_paths import compute_ivfflat_probes, assert_ivfflat_exists
+                    probes = compute_ivfflat_probes(
+                        self._fetch_K,
+                        dataset=_active_dataset or "imdb",
+                        probe_factor=self._fss_pf,
+                    )
                     cur.execute(f"SET ivfflat.probes = {probes}")
                     if self.table.endswith("_ivf"):
                         field = self.scoring_signal["field"]
@@ -651,7 +666,6 @@ class FilteredScoreStreamer:
     # -- predicate_aware: filtered HNSW traversal ----------------------
 
     def _fetch_predicate_aware(self):
-        assert False, "predicate_aware is dead code: _init_strategy never selects it"
         """
         Filtered HNSW via the custom <-># operator.
 
@@ -670,8 +684,10 @@ class FilteredScoreStreamer:
         sig = self.scoring_signal
 
         t0 = _time.perf_counter()
-        valid_ids = resolve_predicate_ids(self.conn, self.table, self.predicates)
-        max_id = get_max_id(self.conn, self.table)
+        valid_ids = resolve_predicate_ids(
+            self.conn, self.table, self.predicates, id_col=self._id_col
+        )
+        max_id = get_max_id(self.conn, self.table, id_col=self._id_col)
         bitmap = make_bitmap(valid_ids, max_id)
         self.profile["fetch_postfilter"] += _time.perf_counter() - t0
 

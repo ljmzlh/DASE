@@ -1,5 +1,5 @@
 """
-Workload loader: 读取 workload 目录下的 JSON，供 baseline 执行使用.
+Workload loader: 读取 workload 目录下的 JSON，供 DASE 执行使用.
 Query 文件中 semantic 信号可含 query_embed（1536 维），由 fill_embeddings 填入.
 Usage:
   from workload.load import load_workload, get_queries

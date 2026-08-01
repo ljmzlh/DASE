@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -62,9 +62,6 @@ AUD_MONK_POS = ["a sound recording of a monkey", "audio of monkey vocalizations 
 AUD_MONK_NEG = ["a sound recording of an animal that is not a monkey", "audio of a non-monkey animal vocalization", "animal sound clip without any monkey"]
 
 ALPHA = 0.5
-PAPER_BQ_Q8 = {"score": 0.75, "latency_s": 35.5, "cost_usd": 0.23}
-PAPER_DASE_NN_Q8 = {"score": 0.00, "latency_s": 2e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = True
 
 
 def _uri_array_literal(uris):
@@ -179,15 +176,6 @@ def main():
     print(f"  image per_row=${img_per_row:.6f}, audio per_row=${aud_per_row:.6f}")
     profile["calibration"] = {"image_per_row": img_per_row, "audio_per_row": aud_per_row}
 
-    if SKIP_BASELINE:
-        print("\n=== Baseline skipped (4-way AI.IF run is long; using paper numbers) ===")
-        bcost = PAPER_BQ_Q8["cost_usd"]; bwall = PAPER_BQ_Q8["latency_s"]; bslot = None
-        b_score = PAPER_BQ_Q8["score"]; b_cities = None
-        bcalls = round(bcost / ((img_per_row + aud_per_row)/2))
-        profile["baseline"] = {"_status": "aborted",
-                                "score": {"score": b_score, "_source": "paper"},
-                                "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                                "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"}}
 
     # ── Stage 1: 2 staging tables (image + audio) ──
     print(f"\n=== Cascade Stage 1: 2 staging tables ===")
@@ -256,25 +244,9 @@ def main():
                    "cost_usd": cascade_cost, "n_llm_calls": s2_calls},
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q8["score"], "paper_DASE_NN": PAPER_DASE_NN_Q8["score"], "ours_BQ": b_score, "ours_cascade": cscore},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q8["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q8["latency_s"], "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q8["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q8["cost_usd"], "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": bcalls if b_cities is None else 0, "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q8 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q8["score"], PAPER_DASE_NN_Q8["score"], b_score, cscore], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q8["latency_s"], PAPER_DASE_NN_Q8["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q8["cost_usd"], PAPER_DASE_NN_Q8["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [bcalls, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

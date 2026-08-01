@@ -25,12 +25,10 @@ SEMBENCH_MY = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 sys.path.insert(0, DASE_ROOT)
 sys.path.insert(0, SEMBENCH_MY)
 
-from google.cloud import bigquery  # noqa: E402
-
 from dase_cascade import (  # noqa: E402
     PairCosineSignal, AiIfVerifier,
-    embed_query, bq_client, run_query,
-    build_profile, write_profile, print_summary,
+    embed_query, bq_client, per_row_cost,
+    build_profile, write_profile,
 )
 
 MMQA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -44,9 +42,6 @@ STAGING_TABLE = f"{DATASET}.q7_uncertain"
 
 GAP = 0.05
 PROMPT_PREFIX = "You will be provided with an airline name and an image. Determine if the image shows the logo of the airline."
-PAPER_BQ_Q7 = {"score": 0.00, "latency_s": 91.7, "cost_usd": 1.18, "n_calls": 40000}
-PAPER_DASE_NN_Q7 = {"score": 0.10, "latency_s": 1e-3, "cost_usd": 0.01}
-SKIP_BASELINE = True  # 40000 AI.IF too risky; paper-copy
 
 
 def make_q7_verifier():
@@ -75,6 +70,17 @@ def make_q7_verifier():
     return AiIfVerifier(
         verify_sql=verify_sql, make_staging_sql=make_staging,
         id_column="pair_id", coerce_id=str,
+    )
+
+
+def per_row_cost_q7(client, sample_uris, sample_airline):
+    return per_row_cost(
+        client,
+        prompt=f"{PROMPT_PREFIX} Airline: {sample_airline}.",
+        sample_uris=sample_uris,
+        ext_table=f"{DATASET}.images",
+        method_label="AI.GENERATE_BOOL on images.ref + thinking_budget=0 (airline inlined in prompt)",
+        k=len(sample_uris),
     )
 
 
@@ -108,6 +114,7 @@ def main():
                         "gt_pairs": [list(p) for p in gt_pairs]}
 
     # ── PairCosineSignal between airline-name embeddings and image embeddings ──
+    dase_started = time.perf_counter()
     phrases = [f"the logo of {a}" for a in distinct_airlines]
     chunks = [embed_query(phrases[i:i + 100]) for i in range(0, len(phrases), 100)]
     a_emb = np.concatenate(chunks, axis=0)
@@ -136,58 +143,49 @@ def main():
                                     "median": float(np.median(cands_per_airline)),
                                     "max": int(max(cands_per_airline))},
     }
+    dase_wall = time.perf_counter() - dase_started
 
     client = bq_client(PROJECT)
 
     # ── Verifier (CTAS + AI.IF) ──
     print(f"\n=== AiIfVerifier on {len(candidate_pairs)} pairs ===")
+    if not candidate_pairs:
+        raise RuntimeError("DASE prefilter produced no candidate pairs")
     verifier = make_q7_verifier()
-    # paper-rate-rescaled per-pair cost (no separate calibration; matches v1 convention)
-    paper_per_call = PAPER_BQ_Q7["cost_usd"] / PAPER_BQ_Q7["n_calls"]
-    vres = verifier.verify(client, candidate_pairs, paper_per_call)
+    sample_uris = list(dict.fromkeys(uri for _, uri in candidate_pairs))[:5]
+    calibration = per_row_cost_q7(client, sample_uris, candidate_pairs[0][0])
+    profile["calibration"] = calibration.to_dict()
+    print(f"  calibrated verifier cost=${calibration.per_row_cost_usd:.6f}/pair "
+          f"on {calibration.n_sample} images")
+    verifier_started = time.perf_counter()
+    vres = verifier.verify(client, candidate_pairs, calibration.per_row_cost_usd)
+    verifier_wall = time.perf_counter() - verifier_started
+
     # Recover (airline, uri) pairs from pair_id
     cas_pairs = set()
-    for pid in vres.positive_ids:
-        a, uri = pid.split("|", 1)
-        fn = os.path.basename(uri)
-        cas_pairs.add((a, fn))
+    for pair_id in vres.positive_ids:
+        airline, uri = pair_id.split("|", 1)
+        cas_pairs.add((airline, os.path.basename(uri)))
     cscore, cp_v, cr_v = f1_pairs(cas_pairs, gt_pairs)
     print(f"  verified {len(cas_pairs)} pairs, F1={cscore:.4f} P={cp_v:.4f} R={cr_v:.4f}")
     print(f"  CTAS wall={vres.ctas_wall_s:.2f}s, AI.IF wall={vres.wall_s:.2f}s")
 
-    n_cas = vres.n_calls
-    cas_cost = vres.cost_usd
-    cas_lat_rs = PAPER_BQ_Q7["latency_s"] * n_cas / PAPER_BQ_Q7["n_calls"] + 1.25 + 2.5
 
     profile["cascade"] = {
-        "method": f"PairCosineSignal cross-modal embedding prefilter sim≥top1-{GAP}; AiIfVerifier on borderline (airline, image) pairs",
+        "method": f"PairCosineSignal cross-modal embedding prefilter sim≥top1-{GAP}; AiIfVerifier on candidate pairs",
         "verifier": vres.to_dict(),
-        "result_pairs": [list(p) for p in sorted(cas_pairs)],
+        "result_pairs": [list(pair) for pair in sorted(cas_pairs)],
         "score": {"f1": cscore, "precision": cp_v, "recall": cr_v},
-        "totals": {"wall_s": vres.ctas_wall_s + vres.wall_s,
-                   "slot_ms_bq_total": vres.ctas_slot_ms + vres.slot_ms,
-                   "cost_usd": cas_cost, "n_llm_calls": n_cas},
+        "totals": {
+            "wall_s": dase_wall + verifier_wall,
+            "wall_breakdown_s": {"dase": dase_wall, "bq_verifier": verifier_wall},
+            "slot_ms_bq_total": vres.ctas_slot_ms + vres.slot_ms,
+            "cost_usd": vres.cost_usd,
+            "n_llm_calls": vres.n_calls,
+        },
     }
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q7["score"], "paper_DASE_NN": PAPER_DASE_NN_Q7["score"],
-                   "ours_BQ": PAPER_BQ_Q7["score"], "ours_cascade": cscore},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q7["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q7["latency_s"],
-                    "ours_BQ": PAPER_BQ_Q7["latency_s"], "ours_cascade": cas_lat_rs},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q7["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q7["cost_usd"],
-                      "ours_BQ": PAPER_BQ_Q7["cost_usd"], "ours_cascade": cas_cost},
-        "n_llm_calls": {"paper_BQ": PAPER_BQ_Q7["n_calls"], "paper_DASE_NN": 0,
-                         "ours_BQ": PAPER_BQ_Q7["n_calls"], "ours_cascade": n_cas},
-    }
+
     write_profile(profile, PROFILE_PATH)
-    print_summary(
-        "MMQA Q7 (rescaled)",
-        columns=["paper BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q7["score"], cscore], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q7["cost_usd"], cas_cost], ".4f"),
-            ("#LLM calls", [PAPER_BQ_Q7["n_calls"], n_cas], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

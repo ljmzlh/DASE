@@ -104,8 +104,8 @@ def run_w1(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
     dist_op = METRIC_OP.get(sig.get("metric", "l2"), "<->")
 
     sql = (
-        f'SELECT t.id, NULL::bigint AS id_t2,'
-        f' t.title, NULL::text AS title_t2,'
+        f'SELECT t.{_quote(ID_COL)}, NULL::bigint AS id_t2,'
+        f' t.{_quote(TEXT_COL)}, NULL::text AS title_t2,'
         f' (t.{_quote(field)} {dist_op} %(query_embed)s) AS score_dist'
         f' FROM {_quote(table_rel)} t'
         f' ORDER BY score_dist'
@@ -149,13 +149,18 @@ def run_w2(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
             "metric": sig.get("metric", "l2"),
         },
         predicates=table_preds,
+        precomputed_selectivity=query.get("predicate_selectivity"),
+        batch_size=k,
         light_mode=True,
+        query_k=k,
         id_col=ID_COL,
         text_col=TEXT_COL,
+        hnsw_ef=kwargs.get("w2_ef"),
     )
     prof["fss_init"] = time.perf_counter() - t0
     prof["fss_init.table_size"] = fss.profile["init_table_size"]
     prof["fss_init.selectivity"] = fss.profile["init_selectivity"]
+    prof["fss_init.sigma"] = fss.profile.get("sigma")
     prof["fss_strategy"] = fss.strategy
 
     t0 = time.perf_counter()
@@ -320,8 +325,8 @@ def run_w3(
         with conn.cursor(row_factory=dict_row) as cur:
             if use_ivf:
                 if metric != "jaccard":
-                    from baselines_molecule import compute_ivfflat_probes
-                    probes = compute_ivfflat_probes(lim)
+                    from ours.access_paths import compute_ivfflat_probes
+                    probes = compute_ivfflat_probes(lim, dataset=DATASET or "imdb")
                     cur.execute(f"SET ivfflat.probes = {probes}")
             else:
                 ef = min(max(lim, k), HNSW_EF_MAX)
@@ -463,7 +468,7 @@ def _estimate_w4_predicate_sigma(
     """
     σ = fraction of table rows satisfying predicates on this table.
     Uses query[\"predicate_selectivity\"] when present; else COUNT(*) on *_ivf
-    (same relation as baselines.filter_first.build_filter_id_sql).
+    (the same IVFFlat relation used by the predicate-first access path).
 
     Returns (sigma, n_passing_rows or None if sigma came only from query metadata).
     """
@@ -473,13 +478,17 @@ def _estimate_w4_predicate_sigma(
             return float(raw), None
         except (TypeError, ValueError):
             pass
-    if DATASET == "molecule":
-        from baselines_molecule.filter_first import build_filter_id_sql
-    else:
-        from baselines.filter_first import build_filter_id_sql
+    from ours.access_paths import build_predicate_id_sql
 
-    sql, params = build_filter_id_sql(table_display, table_preds)
-    count_sql = sql.replace("SELECT id", "SELECT COUNT(*)", 1)
+    sql, params = build_predicate_id_sql(
+        table_display,
+        table_preds,
+        id_column=_table_pk(table_display),
+    )
+    from_offset = sql.upper().find(" FROM ")
+    if from_offset < 0:
+        raise ValueError(f"filter-first SQL has no FROM clause: {sql!r}")
+    count_sql = "SELECT COUNT(*)" + sql[from_offset:]
     rel_ivf = table_display.lower() + "_ivf"
     with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
         cur.execute(f"SELECT COUNT(*) FROM {_quote(rel_ivf)}")
@@ -505,18 +514,20 @@ def _run_w4_filter_first_ra(
     t0: float,
 ) -> Tuple[List[Tuple], Dict]:
     """
-    W4 bypass: same execution as baselines.filter_first.run_filter_first_query_w4 —
-    filter on *_ivf, one SQL with weighted multi-signal distance + ORDER BY + LIMIT k
+    W4 predicate-first path: filter on *_ivf, then use one SQL query with
+    weighted multi-signal distance + ORDER BY + LIMIT k
     (IVFFlat, enable_indexscan off). Avoids multiple HNSW round-trips per signal.
     """
-    if DATASET == "molecule":
-        from baselines_molecule.filter_first import run_filter_first_query_w4
-    else:
-        from baselines.filter_first import run_filter_first_query_w4
+    from ours.access_paths import run_predicate_first_w4
 
     n_sig = len(signals)
     t1 = time.perf_counter()
-    raw_rows, n_ids = run_filter_first_query_w4(conn, query)
+    raw_rows, n_ids = run_predicate_first_w4(
+        conn,
+        query,
+        id_column=_table_pk(table_display),
+        text_column=_table_text(table_display),
+    )
     t_db = time.perf_counter() - t1
 
     if not raw_rows:
@@ -541,12 +552,7 @@ def _run_w4_filter_first_ra(
             prof[f"stream_{i}_cursor_on_filtered_stream"] = 0
         return [], prof
 
-    # imdb row shape: (id, id_t2, title, title_t2, score_dist)
-    # molecule row shape: (fact_id, score_dist)
-    if DATASET == "molecule":
-        rows = [(r[0], "", float(r[1])) for r in raw_rows]
-    else:
-        rows = [(r[0], r[2], float(r[4])) for r in raw_rows]
+    rows = [(r[0], r[1] or "", float(r[2])) for r in raw_rows]
 
     prof = {
         "w4_mode": "filter_first_ra",
@@ -633,7 +639,7 @@ def run_w4(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
 
     # Build FSS streams
     assert sigma > 0, f"W4 requires predicate_selectivity > 0, got {sigma}"
-    # Align W4 TA.score_first cold-start with rerank_w4:
+    # Align W4 score-stream cold start across all signals:
     # high-σ queries start from a small top-N instead of the generic 200-row probe.
     w4_init_stream_fetchK = min(max(int(math.ceil(20.0 / sigma)), 20), 100_000)
 
@@ -963,7 +969,7 @@ def _run_w5_index_topk(
     n_ti_queries = 0
 
     while len(out) < k and limit_outer <= LIMIT_OUTER_MAX:
-        ef = max(20, int(round(limit_outer * pf)))
+        ef = min(1000, max(20, int(round(limit_outer * pf))))
         t0 = time.perf_counter()
         with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
             cur.execute(f"SET hnsw.ef_search = {ef}")
@@ -1019,7 +1025,7 @@ def run_w5(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
         double limit_outer on failure.
     """
     w5_cfg = kwargs.get("w5_cfg") or _load_w5_setting()
-    pf = float(w5_cfg.get("pf", 1.5))
+    pf = float(kwargs["w5_pf"]) if kwargs.get("w5_pf") is not None else float(w5_cfg.get("pf", 1.5))
     rate_threshold = float(w5_cfg.get("select_distinct_threshold", W5_SELECT_DISTINCT_RATE_THRESHOLD))
 
     prof: Dict[str, Any] = {"pf": pf}
@@ -1148,6 +1154,7 @@ def _run_w6_strategy_c(
     sig: Dict[str, Any],
     k: int,
     prof: Dict[str, Any],
+    cand_cap: Optional[int] = None,
 ) -> List[Tuple]:
     """
     Strategy C: direct enumeration when expected_valid_tuples is tiny.
@@ -1185,10 +1192,14 @@ def _run_w6_strategy_c(
             params[key] = val
 
     t0 = time.perf_counter()
+    cap_clause = ""
+    if cand_cap is not None:
+        cap_clause = f' ORDER BY "dis" LIMIT {int(cand_cap)}'
     sql = (
         f'SELECT "{seed_id_col}", "{partner_id_col}", "dis" '
         f'FROM "{ti_table}" '
         f'WHERE {" AND ".join(where_parts)}'
+        f'{cap_clause}'
     )
     with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
         cur.execute(sql, params)
@@ -1256,6 +1267,7 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
     """
     prof: Dict[str, Any] = {}
     t_total = time.perf_counter()
+    cand_cap = kwargs.get("w6_cand_cap")
 
     scoring = query["scoring"]
     sig = scoring["signals"][0]
@@ -1299,7 +1311,8 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
     # (expected matching rows in the TI table, not distinct seed IDs)
     # When small (< threshold), JIM lookup is cheap → use A (pre-filter).
     # When large, JIM lookup dominates → use B (post-filter).
-    EVT_THRESHOLD = float(query.get("w6_evt_threshold", 10000))
+    evt_override = kwargs.get("w6_evt_threshold")
+    EVT_THRESHOLD = float(evt_override) if evt_override is not None else float(query.get("w6_evt_threshold", 10000))
     evt = precomputed_sel.get("expected_valid_tuples")
     if evt is None:
         ti_table_size = precomputed_sel.get("ti_table_size")
@@ -1325,6 +1338,7 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
             seed_side=seed_side, tau=tau,
             seed_preds=seed_preds, partner_preds=partner_preds,
             sig=sig, k=k, prof=prof,
+            cand_cap=cand_cap,
         )
         prof["total"] = time.perf_counter() - t_total
         def _round(d):
@@ -1519,6 +1533,8 @@ def _build_w7_streams(
             table_preds = [p for p in predicates if norm_table(p["table"]) == table]
 
             sel_role = precomputed_selectivity.get(f"sel_{role}")
+            if sel_role is None and not table_preds:
+                sel_role = 1.0
             assert sel_role is not None, (
                 f"w7 requires precomputed sel_{role} in query['precomputed_selectivity']; "
                 f"runtime estimation disabled"
@@ -1980,7 +1996,7 @@ def _batch_score_sql_two_sides(
     ) -> Tuple[str, Any]:
         actual_table = _resolve_hnsw_table(table)
         pk = _table_pk(table)
-        metric = sig["metric"]
+        metric = sig.get("metric", "l2")
         dist_op = METRIC_OP[metric]
         field = sig["field"]
         if metric == "jaccard":
@@ -2521,13 +2537,27 @@ def main():
     parser.add_argument(
         "--eps",
         type=float,
-        default=0.01,
+        default=None,
         help="TA slack: kth_score <= threshold + eps (W3; also W7/W8). 0 = strict. Default 0.01.",
     )
     parser.add_argument("--no-adaptive", action="store_true",
                         help="Disable adaptive stream extension for W3")
+    parser.add_argument("--w2-ef", type=int, default=None, metavar="EF",
+                        help="W2 HNSW ef_search; controls its recall-throughput operating point.")
+    parser.add_argument("--w2-sigma-low", type=float, default=None, metavar="S",
+                        help="W2 FSS crossover between predicate-first and ANN execution.")
+    parser.add_argument("--w5-pf", type=float, default=None, metavar="F",
+                        help="W5 HNSW effort multiplier for index-top-k execution.")
+    parser.add_argument("--w6-cand-cap", type=int, default=None, metavar="N",
+                        help="W6 cap on closest SemJI candidate rows; lower is faster and approximate.")
+    parser.add_argument("--w6-evt-threshold", type=float, default=None, metavar="T",
+                        help="W6 crossover between direct SemJI enumeration and FSS execution.")
+    parser.add_argument("--time-budget", type=float, default=None, metavar="SEC",
+                        help="Override the per-query W7/W8 time budget.")
     parser.add_argument("--limit", type=int, default=None, metavar="N",
                         help="Only run first N queries.")
+    parser.add_argument("--output", type=str, default=None, metavar="PATH",
+                        help="Write the result JSON to PATH instead of the dataset results directory.")
     args = parser.parse_args()
 
     path = args.workload
@@ -2556,18 +2586,23 @@ def main():
     run_id = _generate_run_id()
 
     # Build run_kwargs from workload-specific settings
-    run_kwargs = {"eps": args.eps, "adaptive": not args.no_adaptive}
+    cli_eps = args.eps
+    effective_eps = 0.01 if cli_eps is None else float(cli_eps)
+    run_kwargs = {"eps": effective_eps, "adaptive": not args.no_adaptive}
+    if args.w2_ef is not None:
+        run_kwargs["w2_ef"] = int(args.w2_ef)
     setting_snapshot = {
         "run_id": run_id,
         "workload": wtype,
         "workload_path": path,
-        "eps": args.eps,
+        "eps": effective_eps,
+        "cli_eps_override": cli_eps is not None,
         "adaptive": not args.no_adaptive,
     }
 
     if wtype.upper() in ("W2", "W3"):
         w_cfg = _load_setting(wtype.lower())
-        if "eps" in w_cfg:
+        if cli_eps is None and "eps" in w_cfg:
             run_kwargs["eps"] = float(w_cfg["eps"])
         if "adaptive" in w_cfg:
             run_kwargs["adaptive"] = bool(w_cfg["adaptive"])
@@ -2581,7 +2616,11 @@ def main():
         meta["fss_strategy"] = {
             "sigma_low": fss_cfg.get("sigma_low", 0.05),
             "sigma_high": fss_cfg.get("sigma_high", 0.80),
+            "enable_predicate_aware": fss_cfg.get("enable_predicate_aware", False),
         }
+        if args.w2_sigma_low is not None:
+            meta["fss_strategy"]["sigma_low"] = float(args.w2_sigma_low)
+            setting_snapshot["w2_sigma_low"] = float(args.w2_sigma_low)
         setting_snapshot["w2_setting"] = w2_cfg
 
     if wtype.upper() == "W4":
@@ -2591,6 +2630,8 @@ def main():
         run_kwargs["fss_pf"] = fss_pf
         if "ta_eps" in w4_cfg:
             run_kwargs["w4_ta_eps"] = w4_cfg["ta_eps"]
+        if cli_eps is not None:
+            run_kwargs["w4_ta_eps"] = float(cli_eps)
         _w4_cfg_keys_to_run = _W4_FF_TA_THRESHOLD_KEYS
         for _k in _w4_cfg_keys_to_run:
             if _k in w4_cfg:
@@ -2601,6 +2642,7 @@ def main():
         meta["fss_strategy"] = {
             "sigma_low": fss_cfg.get("sigma_low", 0.05),
             "sigma_high": fss_cfg.get("sigma_high", 0.80),
+            "enable_predicate_aware": fss_cfg.get("enable_predicate_aware", False),
         }
         setting_snapshot["w4_setting"] = w4_cfg
 
@@ -2609,24 +2651,39 @@ def main():
     if wtype.upper() == "W5":
         syn_conn = psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.tuple_row, autocommit=True)
         run_kwargs["syn_conn"] = syn_conn
+        if args.w5_pf is not None:
+            run_kwargs["w5_pf"] = float(args.w5_pf)
+            setting_snapshot["w5_pf_override"] = float(args.w5_pf)
         setting_snapshot["w5_setting"] = _load_w5_setting()
+
+    if wtype.upper() == "W6":
+        if args.w6_cand_cap is not None:
+            run_kwargs["w6_cand_cap"] = int(args.w6_cand_cap)
+            setting_snapshot["w6_cand_cap"] = int(args.w6_cand_cap)
+        if args.w6_evt_threshold is not None:
+            run_kwargs["w6_evt_threshold"] = float(args.w6_evt_threshold)
+            setting_snapshot["w6_evt_threshold"] = float(args.w6_evt_threshold)
 
     if wtype.upper() == "W7":
         w7_cfg = _load_w7_setting()
-        if "eps" in w7_cfg:
+        if cli_eps is None and "eps" in w7_cfg:
             run_kwargs["eps"] = float(w7_cfg["eps"])
         if "time_budget" in w7_cfg:
             run_kwargs["time_budget"] = float(w7_cfg["time_budget"])
+        if args.time_budget is not None:
+            run_kwargs["time_budget"] = float(args.time_budget)
         if "ti_chunk_step" in w7_cfg:
             run_kwargs["ti_chunk_step"] = float(w7_cfg["ti_chunk_step"])
         setting_snapshot["w7_setting"] = w7_cfg
 
     if wtype.upper() == "W8":
         w8_cfg = _load_w8_setting()
-        if "eps" in w8_cfg:
+        if cli_eps is None and "eps" in w8_cfg:
             run_kwargs["eps"] = float(w8_cfg["eps"])
         if "time_budget" in w8_cfg:
             run_kwargs["time_budget"] = float(w8_cfg["time_budget"])
+        if args.time_budget is not None:
+            run_kwargs["time_budget"] = float(args.time_budget)
         if "ti_chunk_step" in w8_cfg:
             run_kwargs["ti_chunk_step"] = float(w8_cfg["ti_chunk_step"])
         if "evt_threshold" in w8_cfg:
@@ -2663,9 +2720,9 @@ def main():
         elapsed_q = time.perf_counter() - tq
         print(f"  {qid}: {len(rows)} results in {elapsed_q:.3f}s", file=sys.stderr)
 
-        # End transaction so SET LOCAL from baselines.filter_first (e.g.
-        # enable_indexscan = off) does not leak across queries. Baseline uses a
-        # new connection per query; without commit/rollback here one FilterFirst
+        # End transaction so SET LOCAL from predicate-first access (e.g.
+        # enable_indexscan = off) does not leak across queries. Without a
+        # commit/rollback here one predicate-first
         # W4 query disables index scans for the entire remaining run.
         conn.commit()
 
@@ -2700,10 +2757,13 @@ def main():
     # Save results
     workload_stem = os.path.splitext(os.path.basename(path))[0]
     dataset_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path))))
-    results_dir = os.path.join(dataset_dir, "results", wtype.lower())
-    os.makedirs(results_dir, exist_ok=True)
-
-    out_path = os.path.join(results_dir, f"results_dase_{workload_stem}_{run_id}.json")
+    if args.output:
+        out_path = os.path.abspath(args.output)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    else:
+        results_dir = os.path.join(dataset_dir, "results", wtype.lower())
+        os.makedirs(results_dir, exist_ok=True)
+        out_path = os.path.join(results_dir, f"results_dase_{workload_stem}_{run_id}.json")
     out_data = {
         "method": "dase",
         "run_id": run_id,

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, TopKBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 import evaluator as ev  # sembench's per-Q evaluator (movie Q2: _retrieval_limit)
 
@@ -49,7 +49,6 @@ NEGATIVE = [
 
 K_CANDIDATES = 10
 TARGET = 5
-PAPER_BQ_Q2 = {"score_f1": 1.00, "latency_s": 9.5, "cost_usd": 0.003}
 
 
 def make_q2_verifier():
@@ -67,18 +66,6 @@ def make_q2_verifier():
     return AiIfVerifier(verify_sql_template=verify_sql_template, id_column="id", coerce_id=int)
 
 
-def run_baseline(client):
-    sql = f"""
-    SELECT reviewId AS id
-    FROM movie.reviews AS r
-    WHERE r.id = '{MOVIE_ID}' AND AI.IF(
-      ('{PROMPT}', r.reviewText),
-      connection_id => 'us.connection',
-      endpoint => 'gemini-2.5-flash'
-    )
-    LIMIT 5
-    """
-    return run_query(client, sql)
 
 
 def per_row_cost_movie_q2(client):
@@ -169,65 +156,27 @@ def main():
     profile["dase_partition"] = cres.partition.to_dict()
     profile["dase_top_K_reviewIds"] = list(cres.uncertain_ids)
 
-    # ── Baseline (verbatim sembench Q2.sql with LIMIT 5) ──
-    print("\n=== Baseline (sembench Q2.sql verbatim) ===")
-    bdf, blat, bslot, bsql = run_baseline(client)
-    bsys_df = pd.DataFrame({"reviewId": [int(x) for x in bdf["id"]]})
-    bmetric = ev.evaluate_q2(bsys_df)
-    bcalls = round(bslot / 2500) if bslot else len(bdf)
-    bcost = per_row * bcalls
-    print(f"  returned: {list(bsys_df['reviewId'])}")
-    print(f"  P={bmetric.precision:.4f} R={bmetric.recall:.4f} F1={bmetric.f1_score:.4f}")
-    print(f"  wall={blat:.2f}s slot={bslot} calls~{bcalls} cost=${bcost:.6f}")
 
-    profile["baseline"] = {
-        "method": "sembench bigquery/Q2.sql verbatim (LIMIT 5; BQ short-circuits)",
-        "sql": bsql, "result_ids": [int(x) for x in bdf["id"]],
-        "score": {"precision": bmetric.precision, "recall": bmetric.recall, "f1": bmetric.f1_score},
-        "latency_breakdown": {"wall_s": blat, "slot_ms": bslot},
-        "cost_breakdown": {
-            "n_llm_calls_est": bcalls,
-            "n_llm_calls_method": "round(slot_ms/2500)",
-            "per_row_cost_usd": per_row,
-            "total_cost_usd": bcost,
-        },
-    }
     profile["cascade"] = {
         "method": "Cascade(MarginSignal, TopKBand, AiIfVerifier).run() — IN(K) AI.IF + id filter + LIMIT TARGET",
         "verifier": cres.verifier_result.to_dict(),
         "result_ids": accepted,
         "score": {"precision": cmetric.precision, "recall": cmetric.recall, "f1": cmetric.f1_score},
-        "latency_breakdown": {
+        "totals": {
             "wall_s": cwall,
-            "dase": cres.timings_s.get("signal_compute", 0) + cres.timings_s.get("band_partition", 0),
-            "bq_query": cres.verifier_result.wall_s,
-        },
-        "cost_breakdown": {"n_llm_calls": ccalls, "per_row_cost_usd": per_row, "total_cost_usd": ccost},
-    }
-    profile["comparison"] = {
-        "score_f1":    {"paper": PAPER_BQ_Q2["score_f1"], "baseline": bmetric.f1_score, "cascade": cmetric.f1_score},
-        "wall_s":      {"paper": PAPER_BQ_Q2["latency_s"], "baseline": blat, "cascade_total": cwall},
-        "slot_ms_bq":  {"baseline": bslot, "cascade_total": cres.verifier_result.slot_ms},
-        "cost_usd":    {"paper": PAPER_BQ_Q2["cost_usd"], "baseline": bcost, "cascade": ccost},
-        "n_llm_calls": {
-            "paper_implied": round(PAPER_BQ_Q2["cost_usd"] / per_row) if per_row else None,
-            "baseline_est": bcalls,
-            "cascade": ccalls,
+            "wall_breakdown_s": {
+                "dase": cres.timings_s.get("signal_compute", 0) + cres.timings_s.get("band_partition", 0),
+                "bq_stage2": cres.verifier_result.wall_s,
+            },
+            "slot_ms_bq_total": cres.verifier_result.slot_ms,
+            "cost_usd": ccost,
+            "per_row_cost_usd": per_row,
+            "n_llm_calls": ccalls,
         },
     }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        "Movie Q2",
-        columns=["paper", "baseline", "cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q2["score_f1"], bmetric.f1_score, cmetric.f1_score], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q2["latency_s"], blat, cwall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q2["cost_usd"], bcost, ccost], ".4f"),
-            ("#LLM calls", [None, bcalls, ccalls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

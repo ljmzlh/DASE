@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     AlphaBand,
     bq_client, embed_query, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -68,8 +68,6 @@ SCORE_PROMPT = (
 )
 
 ALPHA = 0.7
-PAPER_BQ_Q10 = {"score": 0.44, "latency_s": 32.1, "cost_usd": 0.13}
-SKIP_BASELINE = False  # try once; set True to skip
 
 
 def cosine_sim_matrix(query_emb, doc_embs):
@@ -141,22 +139,6 @@ def stage2_score_uncertain(client):
     return run_query(client, sql, params=params)
 
 
-def run_baseline(client):
-    sql = """
-    SELECT id AS movieId, AVG(reviewScore) AS movieScore
-    FROM (
-      SELECT id,
-        AI.SCORE(
-          (@prompt, reviewText),
-          connection_id => 'us.connection',
-          endpoint => 'gemini-2.5-flash'
-        ) AS reviewScore
-      FROM movie.reviews
-    )
-    GROUP BY id
-    """
-    params = [bigquery.ScalarQueryParameter("prompt", "STRING", SCORE_PROMPT)]
-    return run_query(client, sql, params=params)
 
 
 def main():
@@ -237,59 +219,6 @@ def main():
     print(f"  per_row=${per_row:.6f}")
     profile["calibration"] = cal
 
-    if SKIP_BASELINE:
-        print(f"\n=== Baseline ABORTED (SKIP_BASELINE=True) — using paper Table 4(a) numbers ===")
-        baseline_sql = (
-            "SELECT id AS movieId, AVG(reviewScore) AS movieScore FROM ("
-            "SELECT id, AI.SCORE((@prompt, reviewText), connection_id => 'us.connection', "
-            "endpoint => 'gemini-2.5-flash') AS reviewScore FROM movie.reviews) GROUP BY id"
-        )
-        profile["baseline"] = {
-            "_status": "aborted",
-            "_status_note": (
-                "Baseline NOT run on our project. Q10 has 2000 AI.SCORE calls; if BQ slot "
-                "allocation is poor today this would take 30+ minutes. Per project policy, "
-                "baseline metrics are substituted from paper Table 4(a)."
-            ),
-            "method": "sembench bigquery/Q10.sql verbatim — NOT EXECUTED",
-            "sql": baseline_sql,
-            "score": {"spearman_correlation": PAPER_BQ_Q10["score"], "_source": "paper Table 4(a)"},
-            "latency_breakdown": {"wall_s": PAPER_BQ_Q10["latency_s"], "slot_ms": None, "_source": "paper Table 4(a)"},
-            "cost_breakdown": {
-                "n_llm_calls": n_total,
-                "per_row_cost_usd": per_row,
-                "total_cost_usd": PAPER_BQ_Q10["cost_usd"],
-                "_source": "paper Table 4(a) cost",
-            },
-        }
-        b_score = PAPER_BQ_Q10["score"]
-        bwall = PAPER_BQ_Q10["latency_s"]
-        bslot = None
-        bcost = PAPER_BQ_Q10["cost_usd"]
-        bcalls = n_total
-    else:
-        print(f"\n=== Baseline (sembench bigquery/Q10.sql verbatim on movie.reviews) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        bcalls = n_total
-        bcost = per_row * bcalls
-        bm = ev.evaluate_q10(bdf)
-        b_score = bm.spearman_correlation
-        print(f"  returned: {len(bdf)} movies")
-        print(f"  wall={bwall:.2f}s, slot_ms={bslot}, n_calls={bcalls}, cost=${bcost:.6f}")
-        print(f"  Spearman={b_score:.4f}, KendallTau={bm.kendall_tau:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q10.sql verbatim on movie.reviews",
-            "sql": bsql,
-            "result_movies": [(str(r.iloc[0]), float(r.iloc[1])) for _, r in bdf.iterrows()],
-            "score": {"spearman_correlation": b_score, "kendall_tau": bm.kendall_tau},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {
-                "n_llm_calls": bcalls,
-                "n_llm_calls_method": "scope size (Q10 no LIMIT, all rows evaluated)",
-                "per_row_cost_usd": per_row,
-                "total_cost_usd": bcost,
-            },
-        }
 
     print(f"\n=== Cascade Stage 1: CTAS {STAGING_TABLE} from {n_uncertain} uncertain reviews ===")
     s1_df, s1_wall, s1_slot, s1_sql = stage1_create_staging(client, uncertain_rids)
@@ -354,27 +283,9 @@ def main():
         },
     }
 
-    profile["comparison"] = {
-        "score_spearman": {"paper": PAPER_BQ_Q10["score"], "baseline": b_score, "cascade": cm.spearman_correlation,
-                           "_baseline_source": "paper (aborted)" if SKIP_BASELINE else "ours"},
-        "wall_s":         {"paper": PAPER_BQ_Q10["latency_s"], "baseline": bwall, "cascade_total": cascade_total_wall},
-        "slot_ms_bq":     {"baseline": bslot, "cascade_total": cascade_total_slot},
-        "cost_usd":       {"paper": PAPER_BQ_Q10["cost_usd"], "baseline": bcost, "cascade": cascade_cost},
-        "n_llm_calls":    {"baseline": bcalls, "cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Movie Q10 (R sem_rank, alpha={ALPHA})",
-        columns=["paper", "baseline", "cascade"],
-        rows=[
-            ("Spearman",   [PAPER_BQ_Q10["score"], b_score, cm.spearman_correlation], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q10["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q10["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [n_total, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    relative_error_score, build_profile, write_profile, print_summary,
+    relative_error_score, build_profile, write_profile,
 )
 
 MOVIE_DIR    = os.path.abspath(os.path.join(_HERE, ".."))
@@ -46,7 +46,6 @@ NEGATIVE = [
 ]
 
 ALPHA = 0.2
-PAPER_BQ_Q3 = {"score": 0.64, "latency_s": 11.0, "cost_usd": 0.003}
 
 
 def make_q3_verifier():
@@ -64,17 +63,6 @@ def make_q3_verifier():
     return AiIfVerifier(verify_sql_template=verify_sql_template, id_column="id", coerce_id=int)
 
 
-def run_baseline(client):
-    sql = f"""
-    SELECT COUNT(*) AS positive_review_cnt
-    FROM movie.reviews AS r
-    WHERE r.id = '{MOVIE_ID}' AND AI.IF(
-      ('{PROMPT}', r.reviewText),
-      connection_id => 'us.connection',
-      endpoint => 'gemini-2.5-flash'
-    )
-    """
-    return run_query(client, sql)
 
 
 def per_row_cost_movie_q3(client):
@@ -163,29 +151,6 @@ def main():
         "uncertain_reviewIds": list(cres.uncertain_ids),
     }
 
-    # ── Baseline (verbatim sembench Q3.sql) ──
-    print(f"\n=== Baseline (sembench Q3.sql verbatim on movie.reviews) ===")
-    bdf, bwall, bslot, bsql = run_baseline(client)
-    bcount = int(bdf.iloc[0]["positive_review_cnt"])
-    bcalls = n_total  # Q3 has no LIMIT; AI.IF runs on every row in scope
-    bcost = per_row * bcalls
-    bscore = relative_error_score(bcount, n_gt_pos)
-    print(f"  count={bcount} (GT={n_gt_pos})")
-    print(f"  wall={bwall:.2f}s  slot={bslot}  calls={bcalls}  cost=${bcost:.6f}  score={bscore:.4f}")
-    profile["baseline"] = {
-        "method": "sembench bigquery/Q3.sql verbatim on movie.reviews",
-        "sql": bsql,
-        "result_count": bcount,
-        "score": {"relative_error": abs(bcount - n_gt_pos) / n_gt_pos if n_gt_pos else 0.0,
-                  "score": bscore},
-        "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-        "cost_breakdown": {
-            "n_llm_calls": bcalls,
-            "n_llm_calls_method": "scope size (Q3 no LIMIT, all rows evaluated)",
-            "per_row_cost_usd": per_row,
-            "total_cost_usd": bcost,
-        },
-    }
 
     profile["cascade"] = {
         "method": "F-cascade with COUNT aggregation: Cascade(MarginSignal, AlphaBand, AiIfVerifier).run()",
@@ -209,31 +174,9 @@ def main():
         },
     }
 
-    profile["comparison"] = {
-        "score":       {"paper": PAPER_BQ_Q3["score"],   "baseline": bscore, "cascade": cscore},
-        "wall_s":      {"paper": PAPER_BQ_Q3["latency_s"], "baseline": bwall, "cascade_total": cwall},
-        "slot_ms_bq":  {"baseline": bslot, "cascade_total": cres.verifier_result.slot_ms},
-        "cost_usd":    {"paper": PAPER_BQ_Q3["cost_usd"], "baseline": bcost, "cascade": ccost},
-        "n_llm_calls": {
-            "paper_implied": round(PAPER_BQ_Q3["cost_usd"] / per_row) if per_row else None,
-            "baseline": bcalls,
-            "cascade": ccalls,
-        },
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Movie Q3 (alpha={ALPHA})",
-        columns=["paper", "baseline", "cascade"],
-        rows=[
-            ("score",      [PAPER_BQ_Q3["score"], bscore, cscore], ".2f"),
-            ("count",      [None, bcount, cascade_count]),
-            ("wall (s)",   [PAPER_BQ_Q3["latency_s"], bwall, cwall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q3["cost_usd"], bcost, ccost], ".4f"),
-            ("#LLM calls", [None, bcalls, ccalls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

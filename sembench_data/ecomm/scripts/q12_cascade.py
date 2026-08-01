@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     ClusterCascade, AiGenerateVerifier,
     bq_client, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -47,7 +47,6 @@ ECOMM_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 PRODUCTS_IMAGE_PARQUET = os.path.join(ECOMM_DIR, "data", "products_image.parquet")
 STYLES_PARQUET = os.path.join(ECOMM_DIR, "cache", "sf_500", "styles_details.parquet")
 PROFILE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q12.json")
-BASELINE_CACHE = os.path.join(ECOMM_DIR, "outputs", "Q12_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 DATASET = "fashion_product_images"
@@ -56,8 +55,6 @@ STAGING_TABLE = f"{DATASET}.q12_reps"
 
 ALLOWED_MC = ["Accessories", "Apparel", "Footwear"]
 TAU_DIST = 0.05
-PAPER_BQ_Q12 = {"score_f1": 0.97, "latency_s": 31.1, "cost_usd": 0.10}
-PAPER_DASE_NN_Q12 = {"score_f1": 0.85, "latency_s": 0.7, "cost_usd": 6e-6}
 
 GENERATE_PROMPT = """
     You are given a product description and an image of the product as well as the product id.
@@ -318,42 +315,6 @@ def main():
 
     profile["dase_partition"] = cres.to_dict()
 
-    # Baseline (cached)
-    if os.path.exists(BASELINE_CACHE):
-        print(f"\n=== Baseline (cached from {BASELINE_CACHE}) ===")
-        with open(BASELINE_CACHE) as f:
-            cache = json.load(f)
-        bres_jsons = set(cache["bres_jsons"])
-        bwall = cache["wall_s"]; bslot = cache.get("slot_ms")
-    else:
-        print("\n=== Baseline (sembench q12.sql verbatim on STYLES_DETAILS) ===")
-        bdf, bwall, bslot, _ = run_query(client, _q12_sql_for(f"{DATASET}.STYLES_DETAILS", with_rep_id=False))
-        bres_jsons = set()
-        for _, row in bdf.iterrows():
-            s = str(row["id"]).strip()
-            try:
-                d = json.loads(s)
-                bres_jsons.add(make_json_id(int(d["id"]), str(d["brand"]).lower(), str(d["category"]).lower()))
-            except Exception:
-                pass
-        with open(BASELINE_CACHE, "w") as f:
-            json.dump({"bres_jsons": sorted(bres_jsons), "wall_s": bwall, "slot_ms": bslot}, f, indent=2)
-        print(f"  cached to {BASELINE_CACHE}")
-    bp, br, b_f1 = f1_set(bres_jsons, gt_jsons)
-    n_pass_baseline = len(bres_jsons)
-    bcalls = n + n_pass_baseline
-    bcost = cal["filter_per_row_usd"] * n + cal["generate_per_row_usd"] * n_pass_baseline
-    print(f"  returned {len(bres_jsons)} JSONs; P={bp:.4f} R={br:.4f} F1={b_f1:.4f}")
-    print(f"  wall={bwall:.2f}s slot={bslot} n_calls={bcalls} cost=${bcost:.6f}")
-    profile["baseline"] = {
-        "method": "sembench bigquery/q12.sql verbatim on STYLES_DETAILS",
-        "sql": _q12_sql_for(f"{DATASET}.STYLES_DETAILS", with_rep_id=False).strip(),
-        "score": {"precision": bp, "recall": br, "f1_score": b_f1},
-        "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-        "cost_breakdown": {"n_llm_calls": bcalls,
-                           "n_llm_calls_method": "n_in_scope filter + generate per filter-pass row",
-                           "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-    }
 
     profile["cascade"] = {
         "method": ("M-cascade ClusterCascade(Agglomerative) → AiGenerateVerifier wrapping Q12 SQL "
@@ -368,29 +329,9 @@ def main():
         },
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q12["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q12["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q12["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q12["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q12["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q12["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": bcalls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Ecomm Q12 (ClusterCascade)",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("F1",         [PAPER_BQ_Q12["score_f1"], PAPER_DASE_NN_Q12["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q12["latency_s"], PAPER_DASE_NN_Q12["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q12["cost_usd"], PAPER_DASE_NN_Q12["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [bcalls, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

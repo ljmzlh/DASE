@@ -28,7 +28,7 @@ from google.cloud import bigquery  # noqa: E402
 from dase_cascade import (  # noqa: E402
     Cascade, MarginSignal, AbsoluteBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 MMQA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -56,9 +56,6 @@ NEGATIVE_PROMPTS = [
 MARGIN_HI = 0.020
 MARGIN_LO = -0.030
 
-PAPER_BQ_Q3a = {"score": 0.7647, "latency_s": 13.3, "cost_usd": 0.0099}
-PAPER_DASE_NN_Q3a = {"score": None, "latency_s": 1e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = False  # 200 rows single AI.IF agg, safe
 
 
 def make_q3a_verifier():
@@ -94,16 +91,6 @@ def make_q3a_verifier():
     )
 
 
-def run_baseline(client):
-    """verbatim BQ q3a.sql (model_params stripped)."""
-    sql = f"""
-    SELECT title
-    FROM {DATASET}.lizzy_caplan_text_data t
-    WHERE AI.IF(
-      t.title || " is a comedy movie given their description: " || t.text,
-      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-    """
-    return run_query(client, sql)
 
 
 def per_row_cost_q3a(client, sample_rows):
@@ -191,30 +178,6 @@ def main():
     cascade_wall = cres.verifier_result.ctas_wall_s + cres.verifier_result.wall_s
     cascade_slot = cres.verifier_result.ctas_slot_ms + cres.verifier_result.slot_ms
 
-    # ── ours BQ baseline (verbatim) ──
-    if SKIP_BASELINE:
-        bcost = PAPER_BQ_Q3a["cost_usd"]; bwall = PAPER_BQ_Q3a["latency_s"]; bslot = None
-        bscore_f1 = PAPER_BQ_Q3a["score"]; bcalls = n; b_titles = None
-        profile["baseline"] = {
-            "_status": "skipped", "score": {"f1": bscore_f1, "_source": "paper"},
-            "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"},
-        }
-    else:
-        print(f"\n=== Baseline (verbatim BQ q3a.sql, 200 AI.IF) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_titles = bdf["title"].tolist()
-        bcalls = n
-        bcost = per_row * n
-        bp_v, br_v, bscore_f1 = f1_set(b_titles, gt_titles)
-        print(f"  baseline returned {len(b_titles)} titles, F1={bscore_f1:.4f} P={bp_v:.4f} R={br_v:.4f}")
-        print(f"  wall={bwall:.2f}s slot_ms={bslot} cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "verbatim BQ q3a.sql", "sql": bsql, "result_titles": b_titles,
-            "score": {"f1": bscore_f1, "precision": bp_v, "recall": br_v},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     profile["cascade"] = {
         "method": "F-cascade: Cascade(MarginSignal, AbsoluteBand, AiIfVerifier).run() — union confident_pos with BQ-verified uncertain",
@@ -225,29 +188,9 @@ def main():
                    "cost_usd": cascade_cost, "n_llm_calls": n_calls_cascade},
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q3a["score"], "paper_DASE_NN": PAPER_DASE_NN_Q3a["score"],
-                   "ours_BQ": bscore_f1, "ours_cascade": cf1_v},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q3a["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q3a["latency_s"],
-                    "ours_BQ": bwall, "ours_cascade": cascade_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q3a["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q3a["cost_usd"],
-                      "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": n, "paper_DASE_NN": 0,
-                         "ours_BQ": bcalls, "ours_cascade": n_calls_cascade},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"MMQA Q3a (MARGIN_HI={MARGIN_HI}, MARGIN_LO={MARGIN_LO})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q3a["score"], PAPER_DASE_NN_Q3a["score"], bscore_f1, cf1_v], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q3a["cost_usd"], PAPER_DASE_NN_Q3a["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("wall (s)",   [PAPER_BQ_Q3a["latency_s"], PAPER_DASE_NN_Q3a["latency_s"], bwall, cascade_wall], ".2f"),
-            ("#LLM calls", [n, 0, bcalls, n_calls_cascade], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

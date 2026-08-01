@@ -23,7 +23,7 @@ from google.cloud import bigquery  # noqa: E402
 from dase_cascade import (  # noqa: E402
     Cascade, MarginSignal, AbsoluteBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 MMQA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -39,9 +39,6 @@ POSITIVE_PROMPTS = ["a romantic comedy movie", "a lighthearted rom-com film", "a
 NEGATIVE_PROMPTS = ["not a romantic comedy movie", "this film is not a rom-com", "not a love story told as a light comedy"]
 MARGIN_HI = 0.013
 MARGIN_LO = -0.030
-PAPER_BQ_Q3f = {"score": 0.7500, "latency_s": 13.0, "cost_usd": 0.0099}
-PAPER_DASE_NN_Q3f = {"score": None, "latency_s": 1e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = False
 
 
 def make_q3f_verifier():
@@ -64,11 +61,6 @@ def make_q3f_verifier():
     )
 
 
-def run_baseline(client):
-    sql = f"""SELECT title FROM {DATASET}.lizzy_caplan_text_data t
-    WHERE AI.IF(t.title || " is a romantic comedy given their description: " || t.text,
-      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')"""
-    return run_query(client, sql)
 
 
 def per_row_cost_q3f(client, sample_rows):
@@ -127,26 +119,6 @@ def main():
         "confident_pos_titles": cp_titles,
     }
 
-    if SKIP_BASELINE:
-        bcost = PAPER_BQ_Q3f["cost_usd"]; bwall = PAPER_BQ_Q3f["latency_s"]
-        bscore = PAPER_BQ_Q3f["score"]; bcalls = n; b_titles = None
-        bslot = None
-        profile["baseline"] = {
-            "_status": "skipped", "score": {"f1": bscore, "_source": "paper"},
-            "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"},
-        }
-    else:
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_titles = bdf["title"].tolist(); bcalls = n; bcost = per_row * n
-        bp_v, br_v, bscore = f1_set(b_titles, gt)
-        print(f"  baseline {len(b_titles)} titles, F1={bscore:.4f} P={bp_v:.4f} R={br_v:.4f}, wall={bwall:.2f}s cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "verbatim BQ q3f.sql", "sql": bsql, "result_titles": b_titles,
-            "score": {"f1": bscore, "precision": bp_v, "recall": br_v},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     cascade_titles = sorted(set(cp_titles) | set(bq_pass))
     cp_v, cr_v, cscore = f1_set(cascade_titles, gt)
@@ -164,25 +136,7 @@ def main():
         "totals": {"wall_s": cas_wall, "slot_ms_bq_total": cas_slot,
                    "cost_usd": cas_cost, "n_llm_calls": n_cas},
     }
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q3f["score"], "paper_DASE_NN": PAPER_DASE_NN_Q3f["score"],
-                   "ours_BQ": bscore, "ours_cascade": cscore},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q3f["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q3f["latency_s"],
-                    "ours_BQ": bwall, "ours_cascade": cas_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q3f["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q3f["cost_usd"],
-                      "ours_BQ": bcost, "ours_cascade": cas_cost},
-        "n_llm_calls": {"paper_BQ": n, "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": n_cas},
-    }
     write_profile(profile, PROFILE_PATH)
-    print_summary(
-        "MMQA Q3f",
-        columns=["paper BQ", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q3f["score"], bscore, cscore], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q3f["cost_usd"], bcost, cas_cost], ".4f"),
-            ("#LLM calls", [n, bcalls, n_cas], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

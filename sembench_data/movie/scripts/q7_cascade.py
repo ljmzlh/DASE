@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     PairCosineSignal, AiIfVerifier,
     bq_client, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -48,8 +48,6 @@ MOVIE_ID = "ant_man_and_the_wasp_quantumania"
 # Q7 has no LIMIT — use larger K to capture more candidate opposite pairs.
 K_POS = 100
 K_NEG = 1000   # extra mass on low-sim pairs (likely opposite-sentiment candidates)
-PAPER_BQ_Q7 = {"score_f1": 0.70, "latency_s": 198.3, "cost_usd": 3.31}
-SKIP_BASELINE = True
 
 
 def per_pair_cost_calibration(client, sample_texts, n_pairs=5):
@@ -209,42 +207,6 @@ def main():
     print(f"  per_pair=${per_pair:.6f}")
     profile["calibration"] = cal
 
-    bsql = (
-        "SELECT r1.id, r1.reviewId AS reviewId1, r2.reviewId AS reviewId2 "
-        "FROM movie.reviews AS r1 JOIN movie.reviews AS r2 "
-        "ON r1.id = r2.id AND r1.reviewId <> r2.reviewId "
-        f"WHERE r1.id = '{MOVIE_ID}' AND AI.IF("
-        f"('{PAIR_PROMPT_PREFIX}', r1.reviewText, '{PAIR_PROMPT_SEP}', r2.reviewText), "
-        "connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')"
-    )
-    if SKIP_BASELINE:
-        print(f"\n=== Baseline ABORTED (SKIP_BASELINE=True) — using paper Table 4(a) numbers ===")
-        bcalls_est = round(PAPER_BQ_Q7["cost_usd"] / per_pair) if per_pair else 0
-        bcost = PAPER_BQ_Q7["cost_usd"]
-        bwall = PAPER_BQ_Q7["latency_s"]
-        bslot = None
-        b_f1 = PAPER_BQ_Q7["score_f1"]
-        profile["baseline"] = {
-            "_status": "aborted",
-            "_status_note": (
-                "Baseline NOT run on our project. Q7 has no LIMIT — must AI.IF on all ~16k "
-                "pairs (paper 198.3s, $3.31). Per project policy, baseline metrics substituted "
-                "from paper Table 4(a)."
-            ),
-            "method": "sembench bigquery/Q7.sql verbatim on movie.reviews — NOT EXECUTED",
-            "sql": bsql,
-            "score": {"precision": None, "recall": None, "f1": PAPER_BQ_Q7["score_f1"], "_source": "paper Table 4(a)"},
-            "latency_breakdown": {"wall_s": PAPER_BQ_Q7["latency_s"], "slot_ms": None, "_source": "paper Table 4(a)"},
-            "cost_breakdown": {
-                "n_llm_calls_est": bcalls_est,
-                "n_llm_calls_method": "paper $3.31 / per_pair_cost (our calibration)",
-                "per_pair_cost_usd": per_pair,
-                "total_cost_usd": PAPER_BQ_Q7["cost_usd"],
-                "_source": "paper Table 4(a) cost",
-            },
-        }
-    else:
-        raise NotImplementedError("set SKIP_BASELINE=False only if you can wait 30+ min and pay ~$3")
 
     print(f"\n=== Cascade verifier (AI.IF on {len(pair_ids)} pairs, NO LIMIT) ===")
     verifier = make_q7_pair_verifier(df)
@@ -281,31 +243,9 @@ def main():
         },
     }
 
-    profile["comparison"] = {
-        "score_f1":    {"paper": PAPER_BQ_Q7["score_f1"], "baseline": b_f1, "cascade": cmetric.f1_score,
-                        "_baseline_source": "paper (aborted)" if SKIP_BASELINE else "ours"},
-        "wall_s":      {"paper": PAPER_BQ_Q7["latency_s"], "baseline": bwall, "cascade_total": cascade_total_wall},
-        "slot_ms_bq":  {"baseline": bslot, "cascade_total": vres.slot_ms},
-        "cost_usd":    {"paper": PAPER_BQ_Q7["cost_usd"], "baseline": bcost, "cascade": cascade_cost},
-        "n_llm_calls": {
-            "paper_implied_via_per_pair": bcalls_est,
-            "baseline_est": bcalls_est,
-            "cascade": ccalls,
-        },
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Movie Q7 (J+R, no LIMIT, K_pos={K_POS}, K_neg={K_NEG})",
-        columns=["paper", "baseline", "cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q7["score_f1"], b_f1, cmetric.f1_score], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q7["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q7["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [None, bcalls_est, ccalls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

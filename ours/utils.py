@@ -184,23 +184,24 @@ def resolve_predicate_ids(
     conn: psycopg.Connection,
     table: str,
     predicates: List[Dict[str, Any]],
+    id_col: str = "id",
 ) -> Set[int]:
     """Resolve all predicates on *table* to a set of valid IDs.
 
     - Clause predicates (>=, <=, etc.) → SQL query for matching IDs.
-    - "in" predicates → use the value set directly.
+    - "in" predicates on id_col → use the value set directly.
     - Intersect all results.
     """
     # "id IN (...)" can be used directly; all others must go through SQL
-    id_in_preds = [p for p in predicates if p["operator"] == "in" and p["attribute"] == "id"]
-    sql_preds = [p for p in predicates if not (p["operator"] == "in" and p["attribute"] == "id")]
+    id_in_preds = [p for p in predicates if p["operator"] == "in" and p["attribute"] == id_col]
+    sql_preds = [p for p in predicates if not (p["operator"] == "in" and p["attribute"] == id_col)]
 
     result_set: Optional[Set[int]] = None
 
     if sql_preds:
         where_parts, params = build_where(sql_preds)
         sql = (
-            f'SELECT "id" FROM {quote(table)} '
+            f'SELECT {quote(id_col)} FROM {quote(table)} '
             f'WHERE {" AND ".join(where_parts)}'
         )
         with conn.cursor(row_factory=tuple_row) as cur:
@@ -217,10 +218,10 @@ def resolve_predicate_ids(
     return result_set if result_set is not None else set()
 
 
-def get_max_id(conn: psycopg.Connection, table: str) -> int:
+def get_max_id(conn: psycopg.Connection, table: str, id_col: str = "id") -> int:
     """Return MAX(id) for a table."""
     with conn.cursor(row_factory=tuple_row) as cur:
-        cur.execute(f'SELECT MAX("id") FROM {quote(table)}')
+        cur.execute(f'SELECT MAX({quote(id_col)}) FROM {quote(table)}')
         return cur.fetchone()[0] or 0
 
 
@@ -268,11 +269,13 @@ def filtered_hnsw_search(
     limit: int,
     offset: int = 0,
     ef_search: int = 400,
+    enable_2hop: bool = False,
 ) -> List[Tuple[Dict[str, Any], float]]:
     """Execute a filtered HNSW search using the <-># operator.
 
     Sets the id_map table GUC, disables seqscan, and runs the filtered
-    vector search.  Returns list of (row_dict, score).
+    vector search. Returns list of (row_dict, score). Two-hop expansion is
+    opt-in so callers can select it per workload or ablation arm.
     """
     _assert_no_ivfflat(conn, table, field)
     dist_op = METRIC_OP[metric]
@@ -291,7 +294,7 @@ def filtered_hnsw_search(
 
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(f"SET hnsw.ef_search = {ef_search}")
-        cur.execute("SET hnsw.enable_2hop = on")
+        cur.execute(f"SET hnsw.enable_2hop = {'on' if enable_2hop else 'off'}")
         cur.execute(f"SET hnsw.id_map_table = '{id_map_table}'")
         cur.execute("SET enable_seqscan = off")
         cur.execute(sql, params)
@@ -307,6 +310,7 @@ def filtered_hnsw_search(
 def build_id_map_table(
     conn: psycopg.Connection,
     source_table: str,
+    id_col: str = "id",
 ) -> str:
     """Build an id_map table mapping (blkno, offno) → real id.
 
@@ -327,7 +331,7 @@ def build_id_map_table(
             f'  PRIMARY KEY (blkno, offno)'
             f')'
         )
-        cur.execute(f'SELECT ctid, "id" FROM {quote(source_table)}')
+        cur.execute(f'SELECT ctid, {quote(id_col)} FROM {quote(source_table)}')
         rows = cur.fetchall()
 
         batch = []

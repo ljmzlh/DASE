@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AbsoluteBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -35,7 +35,6 @@ ECOMM_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 PRODUCTS_IMAGE_PARQUET = os.path.join(ECOMM_DIR, "data", "products_image.parquet")
 STYLES_PARQUET = os.path.join(ECOMM_DIR, "cache", "sf_500", "styles_details.parquet")
 PROFILE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q13.json")
-BASELINE_CACHE = os.path.join(ECOMM_DIR, "outputs", "Q13_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 DATASET = "fashion_product_images"
@@ -45,8 +44,6 @@ STAGING_TABLE = f"{DATASET}.q13_uncertain"
 TAU_HIGH = 1.0   # disabled (drop-only mode)
 TAU_LOW = -0.02
 
-PAPER_BQ_Q13 = {"score_f1": 0.70, "latency_s": 22.4, "cost_usd": 0.38}
-PAPER_DASE_NN_Q13 = {"score_f1": 0.58, "latency_s": 1.0, "cost_usd": 2e-5}
 
 POSITIVE_PROMPTS = [
     "a men's running t-shirt with round neck and short sleeves, in blue or black, with a striped design, suitable for outdoor running in warm weather",
@@ -246,35 +243,7 @@ def main():
         "uncertain_ids": [int(x) for x in cres.uncertain_ids],
     }
 
-    # ── Baseline (cached) ──
     import json
-    if os.path.exists(BASELINE_CACHE):
-        print(f"\n=== Baseline (cached from {BASELINE_CACHE}) ===")
-        with open(BASELINE_CACHE) as f:
-            cache = json.load(f)
-        bres_ids = set(int(x) for x in cache["bres_ids"])
-        bwall = cache["wall_s"]; bslot = cache.get("slot_ms")
-    else:
-        print("\n=== Baseline (sembench q13.sql verbatim on STYLES_DETAILS) ===")
-        bdf, bwall, bslot, _ = run_query(client, _q13_sql_for(f"{DATASET}.STYLES_DETAILS"))
-        bres_ids = set(int(x) for x in bdf["id"])
-        with open(BASELINE_CACHE, "w") as f:
-            json.dump({"bres_ids": sorted(list(bres_ids)), "wall_s": bwall, "slot_ms": bslot}, f, indent=2)
-        print(f"  cached to {BASELINE_CACHE}")
-    bp, br, b_f1 = f1_set(bres_ids, gt_ids)
-    bcalls = n_total
-    bcost = per_row * bcalls
-    print(f"  returned {len(bres_ids)} ids; P={bp:.4f} R={br:.4f} F1={b_f1:.4f}")
-    print(f"  wall={bwall:.2f}s slot={bslot} cost=${bcost:.6f}")
-    profile["baseline"] = {
-        "method": "sembench bigquery/q13.sql verbatim on STYLES_DETAILS",
-        "sql": _q13_sql_for(f"{DATASET}.STYLES_DETAILS").strip(),
-        "result_ids": sorted(list(bres_ids)),
-        "score": {"precision": bp, "recall": br, "f1_score": b_f1},
-        "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-        "cost_breakdown": {"n_llm_calls": bcalls, "n_llm_calls_method": "scope size",
-                           "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-    }
 
     profile["cascade"] = {
         "method": "F-cascade Cascade(MarginSignal, AbsoluteBand, AiIfVerifier).run() w/ CTAS staging",
@@ -288,30 +257,9 @@ def main():
             "n_llm_calls": cres.verifier_result.n_calls,
         },
     }
-    paper_n_calls = round(PAPER_BQ_Q13["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q13["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q13["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q13["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q13["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q13["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q13["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cres.verifier_result.cost_usd},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": cres.verifier_result.n_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Ecomm Q13 (TAU_LOW={TAU_LOW}, TAU_HIGH={TAU_HIGH})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("F1",         [PAPER_BQ_Q13["score_f1"], PAPER_DASE_NN_Q13["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q13["latency_s"], PAPER_DASE_NN_Q13["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q13["cost_usd"], PAPER_DASE_NN_Q13["cost_usd"], bcost, cres.verifier_result.cost_usd], ".4f"),
-            ("#LLM calls", [paper_n_calls, 0, bcalls, cres.verifier_result.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

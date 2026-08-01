@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 # ─── Paths / scenario constants ──────────────────────────────────────────
@@ -68,9 +68,6 @@ IMPALA_NEGATIVE = [
 ]
 
 ALPHA = 0.5  # INTERSECT sensitive to BQ noise on each side
-PAPER_BQ_Q7 = {"score": 1.00, "latency_s": 24.6, "cost_usd": 0.22}
-PAPER_DASE_NN_Q7 = {"score": 0.00, "latency_s": 1e-3, "cost_usd": 1e-9}
-SKIP_BASELINE = True  # baseline INTERSECT 2× AI.IF on full 200 images crashed gRPC
 
 
 def _uri_array_literal(uris):
@@ -99,17 +96,6 @@ def make_prompt_verifier(prompt):
     return AiIfVerifier(verify_sql=verify_sql, id_column="id", coerce_id=str)
 
 
-def run_baseline(client):
-    sql = f"""
-    SELECT City FROM (
-      SELECT DISTINCT City FROM {DATASET}.image_data_mm
-      WHERE AI.IF(('{ZEBRA_PROMPT}', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-    ) INTERSECT DISTINCT (
-      SELECT DISTINCT City FROM {DATASET}.image_data_mm
-      WHERE AI.IF(('{IMPALA_PROMPT}', image), connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-    )
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -176,27 +162,6 @@ def main():
         "dase_impala_confident_cities": sorted(dase_impala_cities),
     }
 
-    if SKIP_BASELINE:
-        b_score = PAPER_BQ_Q7["score"]; bwall = PAPER_BQ_Q7["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q7["cost_usd"]; bcalls = round(bcost / per_row); b_cities = None
-        profile["baseline"] = {"_status": "aborted", "score": {"score": b_score, "_source": "paper"},
-                                "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                                "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"}}
-    else:
-        print(f"\n=== Baseline (sembench Q7.sql verbatim) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_cities = set(bdf["City"])
-        bcalls = 2 * n_total
-        bcost = per_row * bcalls
-        _, _, b_score = f1_set(b_cities, gt_cities)
-        print(f"  baseline cities: {sorted(b_cities)} (GT: {sorted(gt_cities)})  F1={b_score:.4f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q7.sql verbatim with INTERSECT DISTINCT",
-            "sql": bsql, "result_cities": sorted(b_cities),
-            "score": {"f1": b_score},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     # ── Stage 1: shared staging (one CTAS over union) ──
     print(f"\n=== Cascade Stage 1: CTAS {STAGING} (union {len(union_uncertain_idx)} rows) ===")
@@ -247,25 +212,9 @@ def main():
                    "cost_usd": cascade_cost, "n_llm_calls": s2_calls},
     }
 
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q7["score"], "paper_DASE_NN": PAPER_DASE_NN_Q7["score"], "ours_BQ": b_score, "ours_cascade": cscore},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q7["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q7["latency_s"], "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q7["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q7["cost_usd"], "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": round(PAPER_BQ_Q7["cost_usd"] / per_row), "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Wildlife Q7 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q7["score"], PAPER_DASE_NN_Q7["score"], b_score, cscore], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q7["latency_s"], PAPER_DASE_NN_Q7["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q7["cost_usd"], PAPER_DASE_NN_Q7["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [round(PAPER_BQ_Q7["cost_usd"] / per_row), 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

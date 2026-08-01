@@ -4,7 +4,7 @@ Ecomm Q11 cascade — 4-way join (shoes / lower / upper / accessory) all-black +
 
 NL: matching outfits (4 items) all-black, same brand, accessory price ≤ 500.
 GT: 18 quadruples (SF=500).
-BQ baseline: 500³ × 89 × 7 AI.IF ≈ 78B calls — INFEASIBLE.
+The unfiltered BQ template would require about 78B AI.IF calls, so DASE prunes each stage.
 
 Refactored. Operator (paper Table 3): J (4-way semantic join). Identical
 algorithmic skeleton to ecomm/Q10 v2 — one extra role (accessory, with
@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     RoleMarginSignal, AbsoluteBand, PairCosineSignal,
     AiIfVerifier, bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -51,8 +51,6 @@ TAU_HIGH = 0.05
 TAU_LOW  = -0.02
 PAIR_TAU_LOW = 0.75
 STAGE_BATCH = 300
-PAPER_BQ_Q11      = {"score_f1": None, "latency_s": None, "cost_usd": None}
-PAPER_DASE_NN_Q11 = {"score_f1": None, "latency_s": None, "cost_usd": None}
 
 SHOE_PROMPT = """
     You will receive an image and a description of a product.
@@ -403,10 +401,6 @@ def main():
         sum(s1_slots.values()) + sl_ctas_slot + lu_ctas_slot + ua_ctas_slot + sl_slot + lu_slot + ua_slot
     )
 
-    profile["baseline"] = {
-        "_status": "aborted",
-        "_status_note": "BQ template = 500³ × 89 × 7 AI.IF ≈ 78B calls, infeasible. paper Q11 reports X.",
-    }
     profile["cascade"] = {
         "method": "Stage0 RoleMarginSignal × 4 + AbsoluteBand → Stage1 unary AI.IF (cached batched) → Stage2 PairCosineSignal × 3 → Stage3 same-brand AI.IF batched → Stage4 quadruple assembly",
         "stage1_unary_walls_s": s1_walls, "stage1_unary_slots_ms": s1_slots,
@@ -429,24 +423,8 @@ def main():
             "n_llm_calls_breakdown": {"stage1_unary": s1_calls_total, "stage3_pair": s3_total_calls},
         },
     }
-    profile["comparison"] = {
-        "score":       {"paper_BQ": None, "paper_DASE_NN": None, "ours_BQ": None, "ours_cascade": c_f1},
-        "wall_s":      {"paper_BQ": None, "paper_DASE_NN": None, "ours_BQ": None, "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": None, "paper_DASE_NN": None, "ours_BQ": None, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": None, "paper_DASE_NN": 0, "ours_BQ": None, "ours_cascade": s1_calls_total + s3_total_calls},
-    }
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        "Ecomm Q11 (J: 4-way join cascade)",
-        columns=["paper BQ", "DASE+NN", "ours cascade"],
-        rows=[
-            ("F1",         [None, None, c_f1], ".2f"),
-            ("wall (s)",   [None, None, cascade_total_wall], ".2f"),
-            ("cost ($)",   [None, None, cascade_cost], ".4f"),
-            ("#LLM calls", [None, 0, s1_calls_total + s3_total_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

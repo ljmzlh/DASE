@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-setup_data.py — Bootstrap a fresh dase_clean checkout for DASE + cascade runs.
+setup_data.py — Bootstrap a fresh DASE checkout for DASE + cascade runs.
 
 Three phases (each independently skippable):
   1. DOWNLOAD   pull per-scenario sembench files (data/, cache/, ground_truth/,
@@ -18,9 +18,9 @@ Three phases (each independently skippable):
                 ecomm and movie cascade scripts handle BQ tables inline on
                 first run; nothing centralized to do for them here.
 
-Lives at the dase_clean/ root. Sembench scenario files land under
-dase_clean/sembench_data/<scenario>/...; psql parquets land under
-dase_clean/psql_dump/ (loaded into postgres then transient).
+Lives at the repository root. SemBench scenario files land under
+sembench_data/<scenario>/...; PostgreSQL parquets land under psql_dump/
+(loaded into PostgreSQL and otherwise treated as runtime data).
 
 Usage
 -----
@@ -67,7 +67,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-ROOT = Path(__file__).resolve().parent          # dase_clean/
+ROOT = Path(__file__).resolve().parent
 SEMBENCH_ROOT = ROOT / "sembench_data"           # sembench scenario tree
 
 DEFAULT_HF_SOURCE = "https://huggingface.co/datasets/dasepaper/dase_data"
@@ -124,8 +124,6 @@ MANIFEST = {
         "cache/Movies.csv",
         "cache/Reviews.csv",
         "gt_Q10.csv",
-        "lotus_Q10.csv",
-        "lotus_Q9.csv",
         "Q3.csv",
     ],
 }
@@ -740,6 +738,18 @@ def main() -> None:
         help=f"psql URL for molecule db. Default: ${PSQL_MANIFEST['molecule']['url_env']} or {PSQL_MANIFEST['molecule']['default_url']}",
     )
     ap.add_argument(
+        "--nfcorpus-url",
+        default=os.environ.get("NFCORPUS_DATABASE_URL", "postgresql://localhost/nfcorpus"),
+        help="psql URL for the optional NFCorpus depth workload.",
+    )
+    ap.add_argument(
+        "--nfcorpus-parquet-dir",
+        type=Path,
+        default=None,
+        help="Directory containing the three NFCorpus parquet exports. "
+             "NFCorpus is loaded only when this option is supplied.",
+    )
+    ap.add_argument(
         "--psql-parquet-root",
         type=Path,
         default=ROOT / "psql_dump",
@@ -815,6 +825,15 @@ def main() -> None:
             setup_psql_db(db_kind, urls[db_kind], args.psql_parquet_root, args.dry_run)
             if not args.skip_ti:
                 build_ti_tables(db_kind, args.dry_run)
+        if args.nfcorpus_parquet_dir is not None:
+            admin_url, database_name = _split_db_url(args.nfcorpus_url)
+            _ensure_database(admin_url, database_name, args.dry_run)
+            if args.dry_run:
+                print(f"  [dry] would load NFCorpus from {args.nfcorpus_parquet_dir}")
+            else:
+                from nfcorpus_data.load import run_load
+                summary = run_load(args.nfcorpus_parquet_dir, args.nfcorpus_url)
+                print(f"[psql:nfcorpus] {summary}")
 
     # ─── Phase 3: BigQuery setup ────────────────────────────────────────
     if not args.skip_bq:

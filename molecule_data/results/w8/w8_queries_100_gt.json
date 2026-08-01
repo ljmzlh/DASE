@@ -1,5 +1,5 @@
 {
-  "baseline": "ground_truth",
+  "method": "ground_truth",
   "workload_path": "molecule_data/workload/w8/w8_queries_100.json",
   "n_queries": 100,
   "results": [

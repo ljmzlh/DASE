@@ -26,14 +26,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, TopKBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 
 CARS_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 IMAGE_PARQUET = os.path.join(CARS_DIR, "data", "image_cars.parquet")
 GT_CSV = os.path.join(CARS_DIR, "ground_truth", "Q8.csv")
 PROFILE_PATH = os.path.join(CARS_DIR, "outputs", "Q8.json")
-BASELINE_CACHE_PATH = os.path.join(CARS_DIR, "outputs", "Q8_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 BUCKET = f"{PROJECT}-cars_dataset"
@@ -55,25 +54,12 @@ NEGATIVE_PROMPTS = [
 
 TARGET = 100
 K_CANDIDATES = 200
-PAPER_BQ_Q8 = {"score_f1": 0.24, "latency_s": 38.2, "cost_usd": 1.69}
-PAPER_DASE_NN_Q8 = {"score_f1": 0.15, "latency_s": 0.7, "cost_usd": 5e-6}
-SKIP_BASELINE = False
 
 
 def trunc2(x):
     return f"{math.floor(x * 100) / 100:.2f}"
 
 
-Q8_BASELINE_SQL = f"""
-SELECT p.car_id
-FROM {DATASET}.car_mm as x
-JOIN {DATASET}.cars AS p ON p.car_id = x.car_id
-WHERE AI.IF(
-    ('{PROMPT}', x.image),
-    connection_id => 'us.connection',
-    endpoint => 'gemini-2.5-flash')
-LIMIT {TARGET}
-"""
 
 
 def make_q8_verifier():
@@ -208,75 +194,6 @@ def main():
         "margins": top_K_margins, "n_top_K_in_GT": n_top_in_gt,
     }
 
-    # ── Baseline (cached or run) ──
-    cached_baseline = None
-    if os.path.exists(BASELINE_CACHE_PATH):
-        try:
-            cached_baseline = json.load(open(BASELINE_CACHE_PATH))
-        except Exception:
-            cached_baseline = None
-
-    if SKIP_BASELINE:
-        print(f"\n=== Baseline ABORTED — paper Table 4(e) ===")
-        b_p = b_r = None
-        b_f1 = PAPER_BQ_Q8["score_f1"]; bwall = PAPER_BQ_Q8["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q8["cost_usd"]; bcalls = round(bcost / per_row) if per_row else n_total
-        bres_cars = []
-        profile["baseline"] = {
-            "_status": "aborted",
-            "score": {"f1_score": b_f1, "_source": "paper Table 4(e)"},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": None, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row,
-                               "total_cost_usd": bcost, "_source": "paper"},
-            "method": "Q8.sql verbatim — NOT EXECUTED",
-            "sql": Q8_BASELINE_SQL.strip(),
-        }
-    elif cached_baseline is not None:
-        bres_cars = [int(x) for x in cached_baseline["result_ids"]]
-        bwall = float(cached_baseline["wall_s"])
-        bslot = int(cached_baseline.get("slot_ms") or 0)
-        b_p, b_r, b_f1, btp, b_n_sys, b_n_gt_sample = f1_against_gt_sample(bres_cars, gt_cars, TARGET)
-        bcalls = max(round(bslot / 2500), len(bres_cars))
-        bcalls = min(bcalls, n_total)
-        bcost = per_row * bcalls
-        print(f"\n=== Baseline (cached) ===")
-        print(f"  returned {len(bres_cars)} cars; sample TP={btp} (P={b_p:.4f} R={b_r:.4f} F1={b_f1:.4f})")
-        print(f"  wall={bwall:.2f}s (cached), slot_ms={bslot}, n_calls~{bcalls}, cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "Q8.sql verbatim (cached from prior run)",
-            "sql": Q8_BASELINE_SQL.strip(),
-            "result_ids": bres_cars,
-            "score": {"precision": b_p, "recall": b_r, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot, "_status": "cached"},
-            "cost_breakdown": {"n_llm_calls": bcalls,
-                               "n_llm_calls_method": "max(round(slot/2500), |returned|), capped at scope",
-                               "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
-    else:
-        print("\n=== Baseline (Q8.sql verbatim, LIMIT 100 short-circuit) ===")
-        bdf, bwall, bslot, _ = run_query(client, Q8_BASELINE_SQL)
-        bres_cars = [int(x) for x in bdf["car_id"]]
-        b_p, b_r, b_f1, btp, b_n_sys, b_n_gt_sample = f1_against_gt_sample(bres_cars, gt_cars, TARGET)
-        bcalls = max(round(bslot / 2500), len(bres_cars))
-        bcalls = min(bcalls, n_total)
-        bcost = per_row * bcalls
-        print(f"  returned {len(bres_cars)} cars; sample TP={btp} (P={b_p:.4f} R={b_r:.4f} F1={b_f1:.4f})")
-        print(f"  wall={bwall:.2f}s, slot_ms={bslot}, n_calls~{bcalls} (slot/2500), cost=${bcost:.6f}")
-        os.makedirs(os.path.dirname(BASELINE_CACHE_PATH), exist_ok=True)
-        with open(BASELINE_CACHE_PATH, "w") as f:
-            json.dump({"result_ids": bres_cars, "wall_s": bwall, "slot_ms": bslot}, f)
-        print(f"  baseline cache saved to {BASELINE_CACHE_PATH}")
-        profile["baseline"] = {
-            "method": "Q8.sql verbatim",
-            "sql": Q8_BASELINE_SQL.strip(),
-            "result_ids": bres_cars,
-            "score": {"precision": b_p, "recall": b_r, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls,
-                               "n_llm_calls_method": "max(round(slot/2500), |returned|), capped at scope",
-                               "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
-
     profile["cascade"] = {
         "method": (
             f"F+L canonical via dase_cascade: Cascade(MarginSignal, TopKBand({K_CANDIDATES}), "
@@ -308,32 +225,9 @@ def main():
         },
     }
 
-    paper_n_calls = round(PAPER_BQ_Q8["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q8["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q8["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1,
-                  "_baseline_source": "paper (aborted)" if SKIP_BASELINE else "ours"},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q8["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q8["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "slot_ms_bq": {"ours_BQ": bslot, "ours_cascade": cslot, "cascade_stage2": cslot},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q8["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q8["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Cars Q8 (K={K_CANDIDATES})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q8["score_f1"], PAPER_DASE_NN_Q8["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q8["latency_s"], PAPER_DASE_NN_Q8["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q8["cost_usd"], PAPER_DASE_NN_Q8["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [None, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

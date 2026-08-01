@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     PairCosineSignal,
     bq_client, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -38,7 +38,6 @@ PRODUCTS_TEXT_PARQUET = os.path.join(ECOMM_DIR, "data", "products_text.parquet")
 PRODUCTS_IMAGE_PARQUET = os.path.join(ECOMM_DIR, "data", "products_image.parquet")
 STYLES_PARQUET = os.path.join(ECOMM_DIR, "cache", "sf_500", "styles_details.parquet")
 PROFILE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q8.json")
-BASELINE_CACHE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q8_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 DATASET = "fashion_product_images"
@@ -47,8 +46,6 @@ STAGING_TABLE = f"{DATASET}.q8_uncertain_images"
 
 DESC_LEN_MIN = 3000
 TAU_LOW = 0.70
-PAPER_BQ_Q8 = {"score_f1": 0.29, "latency_s": 126.2, "cost_usd": 18.23}
-PAPER_DASE_NN_Q8 = {"score_f1": 0.25, "latency_s": 1e-3, "cost_usd": 1e-9}
 
 
 def _q8_sql_for(images_table_ref: str) -> str:
@@ -216,37 +213,7 @@ def main():
     print(f"  per_row=${per_row:.6f}, sample_cost=${cal['sample_cost_usd']:.6f}, elapsed={cal['elapsed_s']:.1f}s")
     profile["calibration"] = cal
 
-    if os.path.isfile(BASELINE_CACHE_PATH):
-        print(f"\n=== Baseline (cached from {BASELINE_CACHE_PATH}) ===")
-        with open(BASELINE_CACHE_PATH) as f:
-            cache = json.load(f)
-        bres_pair_ids = set(cache["result_pair_ids"])
-        bwall = cache["wall_s"]; bslot = cache.get("slot_ms")
-    else:
-        print("\n=== Baseline (sembench q8.sql verbatim) ===")
-        bdf, bwall, bslot, _ = run_query(client, _q8_sql_for(f"{DATASET}.IMAGES"))
-        bres_pair_ids = set(str(x) for x in bdf["id"])
-        with open(BASELINE_CACHE_PATH, "w") as f:
-            json.dump({"result_pair_ids": sorted(list(bres_pair_ids)),
-                      "wall_s": bwall, "slot_ms": bslot}, f, indent=2)
-        print(f"  cached to {BASELINE_CACHE_PATH}")
 
-    bp, br, b_f1 = f1_set(bres_pair_ids, gt_pair_ids)
-    bcalls = n_long * n_img
-    bcost = per_row * bcalls
-    print(f"  returned {len(bres_pair_ids)} pairs; P={bp:.4f} R={br:.4f} F1={b_f1:.4f}")
-    print(f"  wall={bwall:.2f}s slot={bslot} n_calls={bcalls} cost=${bcost:.6f}")
-    profile["baseline"] = {
-        "method": "sembench bigquery/q8.sql verbatim",
-        "sql": _q8_sql_for(f"{DATASET}.IMAGES").strip(),
-        "n_returned": len(bres_pair_ids),
-        "result_pair_ids": sorted(bres_pair_ids),
-        "score": {"precision": bp, "recall": br, "f1_score": b_f1},
-        "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-        "cost_breakdown": {"n_llm_calls": bcalls,
-                           "n_llm_calls_method": "n_long_desc * n_images (Cartesian)",
-                           "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-    }
 
     # Cascade Stage 1 + 2
     print(f"\n=== Cascade Stage 1: EXTERNAL TABLE {STAGING_TABLE} from {n_unc} uncertain images ===")
@@ -297,30 +264,9 @@ def main():
         },
     }
 
-    paper_n_calls = round(PAPER_BQ_Q8["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q8["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q8["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q8["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q8["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q8["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q8["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Ecomm Q8",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("F1",         [PAPER_BQ_Q8["score_f1"], PAPER_DASE_NN_Q8["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q8["latency_s"], PAPER_DASE_NN_Q8["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q8["cost_usd"], PAPER_DASE_NN_Q8["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [paper_n_calls, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

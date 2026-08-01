@@ -27,16 +27,15 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 
 from dase_cascade import (
-    AlphaBand, AiGenerateVerifier,
+    AlphaBand, AiGenerateVerifier, ConfidenceMarginSignal,
     bq_client, embed_query, per_row_cost, run_query,
-    build_profile, write_profile, print_summary,
+    build_profile, write_profile,
 )
 
 CARS_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 TEXT_PARQUET        = os.path.join(CARS_DIR, "data", "text_complaints.parquet")
 GT_CSV              = os.path.join(CARS_DIR, "ground_truth", "Q10.csv")
 PROFILE_PATH        = os.path.join(CARS_DIR, "outputs", "Q10.json")
-BASELINE_CACHE_PATH = os.path.join(CARS_DIR, "outputs", "Q10_baseline_cache.json")
 
 PROJECT       = os.environ.get("GCP_PROJECT", "")
 DATASET       = "cars_dataset"
@@ -54,9 +53,6 @@ ANCHOR_PROMPTS = [f"complaint about {c.lower()}" for c in CATEGORIES]
 PROMPT_TEMPLATE = "Classify car complaint to one of given problem categories. Answer only one of given problem categories, nothing more. Complaint: %s"
 
 ALPHA = 0.5
-PAPER_BQ_Q10      = {"score_f1": 0.57, "latency_s": 62.0, "cost_usd": 2.70}
-PAPER_DASE_NN_Q10 = {"score_f1": 0.45, "latency_s": 1.8,  "cost_usd": 2e-5}
-SKIP_BASELINE = False
 
 
 def trunc2(x): return f"{math.floor(x * 100) / 100:.2f}"
@@ -96,19 +92,6 @@ def macro_f1(gt_df, sys_df, id_col="car_id", label_col="problem_category"):
     return p, r, f1
 
 
-def run_baseline(client):
-    cats_sql = ", ".join(f'"{c}"' for c in CATEGORIES)
-    sql = f"""
-    SELECT p.car_id, AI.CLASSIFY(
-        FORMAT('{PROMPT_TEMPLATE}', c.summary),
-        categories => [{cats_sql}],
-        connection_id => 'us.connection',
-        endpoint => 'gemini-2.5-flash'
-    ) AS problem_category
-    FROM {DATASET}.cars AS p
-    JOIN {DATASET}.complaints AS c ON p.car_id = c.car_id
-    """
-    return run_query(client, sql)
 
 
 def main():
@@ -170,50 +153,6 @@ def main():
     print(f"  per_row=${per_row:.6f}")
     profile["calibration"] = cal.to_dict()
 
-    # ── Baseline (cached or run) ──
-    cached = json.load(open(BASELINE_CACHE_PATH)) if os.path.exists(BASELINE_CACHE_PATH) else None
-    if SKIP_BASELINE:
-        b_p = b_r = None
-        b_f1 = PAPER_BQ_Q10["score_f1"]; bwall = PAPER_BQ_Q10["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q10["cost_usd"]; bcalls = round(bcost / per_row) if per_row else n_total
-        profile["baseline"] = {"_status": "aborted",
-                               "score": {"f1_score": b_f1, "_source": "paper Table 4(e)"},
-                               "latency_breakdown": {"wall_s": bwall, "_source": "paper"},
-                               "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"}}
-    elif cached is not None:
-        b_class_by_carid = {int(k): str(v).lower().replace("\n", "") for k, v in cached["car_class"].items()}
-        bwall = float(cached["wall_s"]); bslot = int(cached.get("slot_ms") or 0)
-        b_sys = pd.DataFrame({"car_id": df["car_id"].values,
-                              "problem_category": [b_class_by_carid.get(int(c), "") for c in df["car_id"]]})
-        b_p, b_r, b_f1 = macro_f1(gt_aligned, b_sys)
-        bcalls = n_total; bcost = per_row * bcalls
-        print(f"\n=== Baseline (cached) ===  P={b_p:.4f} R={b_r:.4f} F1={b_f1:.4f}, wall={bwall:.2f}s")
-        profile["baseline"] = {
-            "method": "Q10.sql verbatim (cached)",
-            "score": {"precision": b_p, "recall": b_r, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot, "_status": "cached"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
-    else:
-        print("\n=== Baseline (Q10.sql verbatim, ~19657 AI.CLASSIFY) ===")
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_class_by_carid = dict(zip(bdf["car_id"].astype(int).tolist(),
-                                    bdf["problem_category"].astype(str).str.lower().str.replace("\n", "").tolist()))
-        b_sys = pd.DataFrame({"car_id": df["car_id"].values,
-                              "problem_category": [b_class_by_carid.get(int(c), "") for c in df["car_id"]]})
-        b_p, b_r, b_f1 = macro_f1(gt_aligned, b_sys)
-        bcalls = n_total; bcost = per_row * bcalls
-        print(f"  P={b_p:.4f} R={b_r:.4f} F1={b_f1:.4f}, wall={bwall:.2f}s, cost=${bcost:.6f}")
-        os.makedirs(os.path.dirname(BASELINE_CACHE_PATH), exist_ok=True)
-        with open(BASELINE_CACHE_PATH, "w") as f:
-            json.dump({"car_class": {str(k): v for k, v in b_class_by_carid.items()},
-                       "wall_s": bwall, "slot_ms": bslot}, f)
-        profile["baseline"] = {
-            "method": "Q10.sql verbatim", "sql": bsql,
-            "score": {"precision": b_p, "recall": b_r, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     # ── Cascade: verifier on uncertain ──
     print(f"\n=== Cascade: AiGenerateVerifier(AI.CLASSIFY) on {n_uncertain} uncertain complaints ===")
@@ -251,26 +190,8 @@ def main():
             "cost_usd": vres.cost_usd, "n_llm_calls": vres.n_calls,
         },
     }
-    paper_n_calls = round(PAPER_BQ_Q10["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score":       {"paper_BQ": PAPER_BQ_Q10["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q10["score_f1"], "ours_BQ": b_f1, "ours_cascade": c_f1},
-        "wall_s":      {"paper_BQ": PAPER_BQ_Q10["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q10["latency_s"], "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd":    {"paper_BQ": PAPER_BQ_Q10["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q10["cost_usd"], "ours_BQ": bcost, "ours_cascade": vres.cost_usd},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": vres.n_calls},
-    }
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Cars Q10 (alpha={ALPHA})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("F1",         [trunc2(PAPER_BQ_Q10["score_f1"]), trunc2(PAPER_DASE_NN_Q10["score_f1"]), trunc2(b_f1), trunc2(c_f1)]),
-            ("F1 raw",     [PAPER_BQ_Q10["score_f1"], PAPER_DASE_NN_Q10["score_f1"], b_f1, c_f1], ".3f"),
-            ("wall (s)",   [PAPER_BQ_Q10["latency_s"], PAPER_DASE_NN_Q10["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q10["cost_usd"], PAPER_DASE_NN_Q10["cost_usd"], bcost, vres.cost_usd], ".4f"),
-            ("#LLM calls", [paper_n_calls, 0, bcalls, vres.n_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

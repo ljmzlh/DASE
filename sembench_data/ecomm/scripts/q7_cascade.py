@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     PairCosineSignal,
     bq_client, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 from dase_cascade.calibration import _sum_tokens, _to_cost
 from google.cloud import bigquery
@@ -40,7 +40,6 @@ ECOMM_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 PRODUCTS_PARQUET = os.path.join(ECOMM_DIR, "data", "products_text.parquet")
 STYLES_PARQUET = os.path.join(ECOMM_DIR, "cache", "sf_500", "styles_details.parquet")
 PROFILE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q7.json")
-BASELINE_CACHE_PATH = os.path.join(ECOMM_DIR, "outputs", "Q7_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 DATASET = "fashion_product_images"
@@ -49,8 +48,6 @@ STAGING_TABLE = f"{DATASET}.q7_uncertain_pairs"
 PRICE_LIMIT = 500
 TAU_HIGH = 0.95
 TAU_LOW = 0.79
-PAPER_BQ_Q7 = {"score_f1": 0.83, "latency_s": 45.4, "cost_usd": 0.86}
-PAPER_DASE_NN_Q7 = {"score_f1": 0.78, "latency_s": 2e-3, "cost_usd": 1e-9}
 
 JOIN_PROMPT_HEADER = (
     "\n     You will be given two product descriptions. Do both product descriptions describe products of the same category from the same brand, e.g., both are t-shirts from Adidas?\n     \n     The first product description is:\n     "
@@ -58,25 +55,6 @@ JOIN_PROMPT_HEADER = (
 JOIN_PROMPT_MID = "\n     The second product description is:\n     "
 
 
-def _q7_baseline_sql():
-    return f"""
-WITH product_selection AS (
-  SELECT *
-  FROM {DATASET}.STYLES_DETAILS styles_details
-  WHERE true
-    AND price <= {PRICE_LIMIT}
-)
-SELECT
-  CONCAT(CAST(p1.id AS STRING), '-', CAST(p2.id AS STRING)) AS id
-FROM product_selection p1
-JOIN product_selection p2
-  ON AI.IF(('''{JOIN_PROMPT_HEADER}''', p1.productDisplayName, ' - ', p1.productDescriptors.description.value,
-           '''{JOIN_PROMPT_MID}''', p2.productDisplayName, ' - ', p2.productDescriptors.description.value
-          ),
-    connection_id => 'us.connection',
-    endpoint => 'gemini-2.5-flash'
-  )
-"""
 
 
 def _stage2_sql():
@@ -226,36 +204,7 @@ def main():
     print(f"  per_row=${per_row:.6f}, sample_cost=${cal['sample_cost_usd']:.6f}, elapsed={cal['elapsed_s']:.1f}s")
     profile["calibration"] = cal
 
-    # Baseline: cached or fresh
-    if os.path.isfile(BASELINE_CACHE_PATH):
-        print(f"\n=== Baseline (cached from {BASELINE_CACHE_PATH}) ===")
-        with open(BASELINE_CACHE_PATH) as f:
-            cache = json.load(f)
-        bres_pair_ids = set(cache["result_pair_ids"])
-        bwall = cache["wall_s"]; bslot = cache.get("slot_ms")
-    else:
-        print("\n=== Baseline (sembench q7.sql verbatim) ===")
-        bdf, bwall, bslot, _ = run_query(client, _q7_baseline_sql())
-        bres_pair_ids = set(str(x) for x in bdf["id"])
-        with open(BASELINE_CACHE_PATH, "w") as f:
-            json.dump({"result_pair_ids": sorted(list(bres_pair_ids)),
-                      "wall_s": bwall, "slot_ms": bslot}, f, indent=2)
-        print(f"  cached to {BASELINE_CACHE_PATH}")
 
-    bp, br, b_f1 = f1_set(bres_pair_ids, gt_pair_ids)
-    bcalls = n * n
-    bcost = per_row * bcalls
-    print(f"  returned {len(bres_pair_ids)} pairs; P={bp:.4f} R={br:.4f} F1={b_f1:.4f}")
-    print(f"  wall={bwall:.2f}s slot={bslot} n_calls={bcalls} cost=${bcost:.6f}")
-    profile["baseline"] = {
-        "method": "sembench bigquery/q7.sql verbatim", "sql": _q7_baseline_sql().strip(),
-        "n_returned": len(bres_pair_ids),
-        "score": {"precision": bp, "recall": br, "f1_score": b_f1},
-        "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-        "cost_breakdown": {"n_llm_calls": bcalls,
-                           "n_llm_calls_method": "n_scope^2 (Cartesian self-join)",
-                           "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-    }
 
     # Cascade Stage 1 + 2
     print(f"\n=== Cascade Stage 1: CTAS {STAGING_TABLE} from {n_unc} uncertain pairs ===")
@@ -297,30 +246,9 @@ def main():
         },
     }
 
-    paper_n_calls = round(PAPER_BQ_Q7["cost_usd"] / per_row) if per_row else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q7["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q7["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q7["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q7["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q7["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q7["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Ecomm Q7",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("F1",         [PAPER_BQ_Q7["score_f1"], PAPER_DASE_NN_Q7["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q7["latency_s"], PAPER_DASE_NN_Q7["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q7["cost_usd"], PAPER_DASE_NN_Q7["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [paper_n_calls, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

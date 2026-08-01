@@ -14,7 +14,6 @@ Two independent Cascades on the (Automatic ⨝ audio ⨝ image) joint scope:
 Client-side AND merges the per-modality yes-car sets. Multi-stage composition
 stays in this script (paper §5.1).
 """
-import json
 import math
 import os
 import sys
@@ -30,7 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    relative_error_score, build_profile, write_profile, print_summary,
+    relative_error_score, build_profile, write_profile,
 )
 
 CARS_DIR = os.path.abspath(os.path.join(_HERE, ".."))
@@ -72,33 +71,12 @@ NEG_IMAGE = [
 
 ALPHA_AUDIO = 1.0
 ALPHA_IMAGE = 0.5
-PAPER_BQ_Q5 = {"score": 1.00, "latency_s": 58.9, "cost_usd": 1.47}
-PAPER_DASE_NN_Q5 = {"score": 0.50, "latency_s": 1.1, "cost_usd": 1e-5}
-SKIP_BASELINE = False
 
 
 def trunc2(x):
     return f"{math.floor(x * 100) / 100:.2f}"
 
 
-Q5_BASELINE_SQL = f"""
-SELECT transmission, COUNT(*) AS count
-FROM (
-  SELECT DISTINCT p.car_id, p.transmission
-  FROM {DATASET}.cars AS p, {DATASET}.audio_mm AS a, {DATASET}.car_mm AS x
-  WHERE p.transmission = "Automatic"
-    AND p.car_id = x.car_id AND p.car_id = a.car_id
-    AND AI.IF(
-      ('{PROMPT_AUDIO}', a.image),
-      connection_id => 'us.connection',
-      endpoint => 'gemini-2.5-flash')
-    AND AI.IF(
-      ('{PROMPT_IMAGE}', x.image),
-      connection_id => 'us.connection',
-      endpoint => 'gemini-2.5-flash')
-)
-GROUP BY transmission
-"""
 
 Q5_STAGE2_AUDIO_SQL = f"""
 SELECT DISTINCT a.car_id AS id
@@ -295,76 +273,6 @@ def main():
                   "n_uncertain": len(cres_i.uncertain_ids)},
     }
 
-    # ── Baseline (cached or run) ──
-    cached_profile = None
-    if os.path.exists(PROFILE_PATH):
-        try:
-            cached_profile = json.load(open(PROFILE_PATH))
-            if cached_profile.get("baseline", {}).get("result_count") is None:
-                cached_profile = None
-        except Exception:
-            cached_profile = None
-
-    if SKIP_BASELINE:
-        print(f"\n=== Baseline ABORTED — paper Table 4(e) numbers ===")
-        b_count = None; b_rel = None
-        b_score = PAPER_BQ_Q5["score"]; bwall = PAPER_BQ_Q5["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q5["cost_usd"]
-        bcalls = round(bcost / ((per_row_audio + per_row_image) / 2)) if (per_row_audio + per_row_image) else (n_audio + n_image)
-        profile["baseline"] = {
-            "_status": "aborted",
-            "score": {"score": b_score, "_source": "paper Table 4(e)"},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": None, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"},
-            "method": "sembench bigquery/Q5.sql verbatim — NOT EXECUTED",
-            "sql": Q5_BASELINE_SQL.strip(),
-        }
-    elif cached_profile is not None:
-        cb = cached_profile["baseline"]
-        b_count = int(cb["result_count"])
-        b_score = relative_error_score(b_count, gt_count)
-        b_rel = abs(b_count - gt_count) / abs(gt_count) if gt_count else 0.0
-        bwall = float(cb["latency_breakdown"]["wall_s"])
-        bslot = cb["latency_breakdown"]["slot_ms"]
-        bcalls = int(cb["cost_breakdown"]["n_llm_calls"])
-        bcost = per_row_audio * n_audio + per_row_image * n_image
-        print(f"\n=== Baseline (cached from prev Q5.json) ===")
-        print(f"  count={b_count}, GT={gt_count}, rel_err={b_rel:.4f}, score={b_score:.4f}")
-        print(f"  wall={bwall:.2f}s (cached), slot_ms={bslot}, n_calls={bcalls}, cost=${bcost:.6f}")
-        profile["baseline"] = {
-            **cb,
-            "_status": "cached_from_prev_profile",
-            "result_count": b_count,
-            "score": {"relative_error": b_rel, "score": b_score},
-        }
-    else:
-        print("\n=== Baseline (sembench Q5.sql verbatim, scalar COUNT) ===")
-        bdf, bwall, bslot, _ = run_query(client, Q5_BASELINE_SQL)
-        if len(bdf) and "count" in bdf.columns:
-            b_count = int(bdf.iloc[0]["count"])
-        else:
-            b_count = 0
-        b_score = relative_error_score(b_count, gt_count)
-        b_rel = abs(b_count - gt_count) / abs(gt_count) if gt_count else 0.0
-        bcalls = n_audio + n_image
-        bcost = per_row_audio * n_audio + per_row_image * n_image
-        print(f"  baseline count={b_count}, GT={gt_count}, rel_err={b_rel:.4f}, score={b_score:.4f}")
-        print(f"  wall={bwall:.2f}s, slot_ms={bslot}, n_calls={bcalls}, cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "sembench bigquery/Q5.sql verbatim",
-            "sql": Q5_BASELINE_SQL.strip(),
-            "result_count": b_count,
-            "score": {"relative_error": b_rel, "score": b_score},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {
-                "n_llm_calls": bcalls,
-                "n_llm_calls_method": "n_audio + n_image (both AI.IF per row)",
-                "per_row_cost_usd_audio": per_row_audio,
-                "per_row_cost_usd_image": per_row_image,
-                "total_cost_usd": bcost,
-            },
-        }
-
     profile["cascade"] = {
         "method": "Composed F F via dase_cascade: 2× Cascade(MarginSignal, AlphaBand, AiIfVerifier) (audio+image) → AND-merge on car_id",
         "stage1_ctas": {
@@ -397,32 +305,9 @@ def main():
         },
     }
 
-    paper_n_calls = round(PAPER_BQ_Q5["cost_usd"] / ((per_row_audio + per_row_image) / 2)) if (per_row_audio + per_row_image) else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q5["score"], "paper_DASE_NN": PAPER_DASE_NN_Q5["score"],
-                  "ours_BQ": b_score, "ours_cascade": c_score,
-                  "_baseline_source": "paper (aborted)" if SKIP_BASELINE else "ours"},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q5["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q5["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "slot_ms_bq": {"ours_BQ": bslot, "ours_cascade": cascade_total_slot},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q5["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q5["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0,
-                        "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        f"Cars Q5 (α_a={ALPHA_AUDIO},α_i={ALPHA_IMAGE})",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score",      [PAPER_BQ_Q5["score"], PAPER_DASE_NN_Q5["score"], b_score, c_score], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q5["latency_s"], PAPER_DASE_NN_Q5["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q5["cost_usd"], PAPER_DASE_NN_Q5["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [None, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

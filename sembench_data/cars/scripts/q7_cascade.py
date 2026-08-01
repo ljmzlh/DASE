@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 from dase_cascade import (
     Cascade, MarginSignal, AlphaBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 CARS_DIR = os.path.abspath(os.path.join(_HERE, ".."))
@@ -37,7 +37,6 @@ IMAGE_PARQUET = os.path.join(CARS_DIR, "data", "image_cars.parquet")
 TEXT_PARQUET = os.path.join(CARS_DIR, "data", "text_complaints.parquet")
 GT_CSV = os.path.join(CARS_DIR, "ground_truth", "Q7.csv")
 PROFILE_PATH = os.path.join(CARS_DIR, "outputs", "Q7.json")
-BASELINE_CACHE_PATH = os.path.join(CARS_DIR, "outputs", "Q7_baseline_cache.json")
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 BUCKET = f"{PROJECT}-cars_dataset"
@@ -85,40 +84,12 @@ ALPHA_AUDIO = 1.0
 ALPHA_IMAGE = 0.5
 ALPHA_TEXT = 0.5
 
-PAPER_BQ_Q7 = {"score_f1": 0.45, "latency_s": 86.0, "cost_usd": 3.17}
-PAPER_DASE_NN_Q7 = {"score_f1": 0.47, "latency_s": 1.3, "cost_usd": 1e-5}
-SKIP_BASELINE = False
 
 
 def trunc2(x):
     return f"{math.floor(x * 100) / 100:.2f}"
 
 
-Q7_BASELINE_SQL = f"""
-WITH sick_audio AS (
-  SELECT DISTINCT p.car_id, year FROM {DATASET}.cars AS p
-  JOIN {DATASET}.audio_mm AS a ON p.car_id = a.car_id
-  WHERE AI.IF(('{PROMPT_AUDIO}', a.image),
-    connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-),
-sick_text AS (
-  SELECT p.car_id, year FROM {DATASET}.cars AS p
-  JOIN {DATASET}.complaints AS s ON p.car_id = s.car_id
-  WHERE AI.IF(FORMAT('{PROMPT_TEXT_ELEC}', s.summary),
-    connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-),
-sick_image AS (
-  SELECT p.car_id, year FROM {DATASET}.car_mm as x
-  JOIN {DATASET}.cars AS p ON p.car_id = x.car_id
-  WHERE AI.IF(('{PROMPT_IMAGE}', x.image),
-    connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')
-)
-SELECT sick_audio.car_id FROM sick_audio
-UNION DISTINCT
-SELECT sick_text.car_id FROM sick_text
-UNION DISTINCT
-SELECT sick_image.car_id FROM sick_image
-"""
 
 Q7_STAGE2_AUDIO_SQL = f"""
 SELECT DISTINCT a.car_id AS id FROM {STAGING_AUDIO} a
@@ -328,77 +299,6 @@ def main():
         "text":  {"n_confident_pos_cars": len(text_dase_pos),  "n_confident_neg": len(cres_t.confident_neg_ids), "n_uncertain": len(cres_t.uncertain_ids)},
     }
 
-    # ── Baseline (cached or run) ──
-    cached_baseline = None
-    if os.path.exists(BASELINE_CACHE_PATH):
-        try:
-            cached_baseline = json.load(open(BASELINE_CACHE_PATH))
-        except Exception:
-            cached_baseline = None
-
-    if SKIP_BASELINE:
-        print(f"\n=== Baseline ABORTED — paper Table 4(e) ===")
-        b_p = b_r = None
-        b_f1 = PAPER_BQ_Q7["score_f1"]; bwall = PAPER_BQ_Q7["latency_s"]; bslot = None
-        bcost = PAPER_BQ_Q7["cost_usd"]; bres_cars = set()
-        bcalls = round(bcost / per_row_image) if per_row_image else (len(audio_scope) + len(image_scope) + len(text_scope))
-        profile["baseline"] = {
-            "_status": "aborted",
-            "score": {"f1_score": b_f1, "_source": "paper Table 4(e)"},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": None, "_source": "paper"},
-            "cost_breakdown": {"n_llm_calls": bcalls, "total_cost_usd": bcost, "_source": "paper"},
-            "method": "Q7.sql verbatim — NOT EXECUTED", "sql": Q7_BASELINE_SQL.strip(),
-        }
-    elif cached_baseline is not None:
-        bres_cars = set(int(x) for x in cached_baseline["result_ids"])
-        bwall = float(cached_baseline["wall_s"])
-        bslot = int(cached_baseline.get("slot_ms") or 0)
-        b_p, b_r, b_f1 = f1_set(bres_cars, gt_cars)
-        bcalls = len(audio_scope) + len(image_scope) + len(text_scope)
-        bcost = (per_row_audio * len(audio_scope) + per_row_image * len(image_scope) + per_row_text * len(text_scope))
-        print(f"\n=== Baseline (cached) ===")
-        print(f"  returned {len(bres_cars)} cars; P={b_p:.4f} R={b_r:.4f} F1={b_f1:.4f}")
-        print(f"  wall={bwall:.2f}s (cached), slot_ms={bslot}, n_calls={bcalls}, cost=${bcost:.6f}")
-        profile["baseline"] = {
-            "method": "Q7.sql verbatim (cached from prior run)",
-            "sql": Q7_BASELINE_SQL.strip(),
-            "result_ids": sorted(list(bres_cars)),
-            "score": {"precision": b_p, "recall": b_r, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot, "_status": "cached"},
-            "cost_breakdown": {"n_llm_calls": bcalls,
-                               "n_llm_calls_method": "n_audio + n_image + n_text (3 sick_* CTEs)",
-                               "per_row_cost_usd_audio": per_row_audio,
-                               "per_row_cost_usd_image": per_row_image,
-                               "per_row_cost_usd_text": per_row_text,
-                               "total_cost_usd": bcost},
-        }
-    else:
-        print("\n=== Baseline (Q7.sql verbatim) ===")
-        bdf, bwall, bslot, _ = run_query(client, Q7_BASELINE_SQL)
-        bres_cars = set(int(x) for x in bdf["car_id"])
-        b_p, b_r, b_f1 = f1_set(bres_cars, gt_cars)
-        bcalls = len(audio_scope) + len(image_scope) + len(text_scope)
-        bcost = (per_row_audio * len(audio_scope) + per_row_image * len(image_scope) + per_row_text * len(text_scope))
-        print(f"  returned {len(bres_cars)} cars; P={b_p:.4f} R={b_r:.4f} F1={b_f1:.4f}")
-        print(f"  wall={bwall:.2f}s, slot_ms={bslot}, n_calls={bcalls}, cost=${bcost:.6f}")
-        os.makedirs(os.path.dirname(BASELINE_CACHE_PATH), exist_ok=True)
-        with open(BASELINE_CACHE_PATH, "w") as f:
-            json.dump({"result_ids": sorted(list(bres_cars)), "wall_s": bwall, "slot_ms": bslot}, f)
-        print(f"  baseline cache saved to {BASELINE_CACHE_PATH}")
-        profile["baseline"] = {
-            "method": "Q7.sql verbatim",
-            "sql": Q7_BASELINE_SQL.strip(),
-            "result_ids": sorted(list(bres_cars)),
-            "score": {"precision": b_p, "recall": b_r, "f1_score": b_f1},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls,
-                               "n_llm_calls_method": "n_audio + n_image + n_text (3 sick_* CTEs)",
-                               "per_row_cost_usd_audio": per_row_audio,
-                               "per_row_cost_usd_image": per_row_image,
-                               "per_row_cost_usd_text": per_row_text,
-                               "total_cost_usd": bcost},
-        }
-
     # ── UNION merge ──
     cascade_cars = audio_yes | image_yes | text_yes
     cp, cr, c_f1 = f1_set(cascade_cars, gt_cars)
@@ -440,31 +340,9 @@ def main():
         },
     }
 
-    paper_n_calls = round(PAPER_BQ_Q7["cost_usd"] / per_row_image) if per_row_image else None
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q7["score_f1"], "paper_DASE_NN": PAPER_DASE_NN_Q7["score_f1"],
-                  "ours_BQ": b_f1, "ours_cascade": c_f1,
-                  "_baseline_source": "paper (aborted)" if SKIP_BASELINE else "ours"},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q7["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q7["latency_s"],
-                   "ours_BQ": bwall, "ours_cascade": cascade_total_wall},
-        "slot_ms_bq": {"ours_BQ": bslot, "ours_cascade": cascade_total_slot},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q7["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q7["cost_usd"],
-                     "ours_BQ": bcost, "ours_cascade": cascade_cost},
-        "n_llm_calls": {"paper_BQ": paper_n_calls, "paper_DASE_NN": 0, "ours_BQ": bcalls, "ours_cascade": s2_calls},
-    }
 
     write_profile(profile, PROFILE_PATH)
 
-    print_summary(
-        "Cars Q7 (composed F F F + UNION)",
-        columns=["paper BQ", "DASE+NN", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q7["score_f1"], PAPER_DASE_NN_Q7["score_f1"], b_f1, c_f1], ".2f"),
-            ("wall (s)",   [PAPER_BQ_Q7["latency_s"], PAPER_DASE_NN_Q7["latency_s"], bwall, cascade_total_wall], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q7["cost_usd"], PAPER_DASE_NN_Q7["cost_usd"], bcost, cascade_cost], ".4f"),
-            ("#LLM calls", [None, 0, bcalls, s2_calls], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

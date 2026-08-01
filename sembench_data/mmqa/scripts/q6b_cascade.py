@@ -23,7 +23,7 @@ from google.cloud import bigquery  # noqa: E402
 from dase_cascade import (  # noqa: E402
     Cascade, MarginSignal, AbsoluteBand, AiIfVerifier,
     bq_client, per_row_cost, run_query,
-    f1_set, build_profile, write_profile, print_summary,
+    f1_set, build_profile, write_profile,
 )
 
 MMQA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -47,9 +47,6 @@ NEGATIVE_PROMPTS = [
 ]
 MARGIN_HI = 0.035
 MARGIN_LO = 0.005
-PAPER_BQ_Q6b = {"score": 0.04, "latency_s": 17.3, "cost_usd": 0.004, "n_calls": 200}
-PAPER_DASE_NN_Q6b = {"score": 0.01, "latency_s": 1e-3, "cost_usd": 2e-4}
-SKIP_BASELINE = False
 
 
 def make_q6b_verifier():
@@ -73,11 +70,6 @@ def make_q6b_verifier():
     )
 
 
-def run_baseline(client):
-    sql = f"""SELECT Airlines FROM {DATASET}.tampa_international_airport
-    WHERE AI.IF("Given destinations '" || Destinations || "' of " || Airlines || ", the airline has flights to Germany.",
-      connection_id => 'us.connection', endpoint => 'gemini-2.5-flash')"""
-    return run_query(client, sql)
 
 
 def per_row_cost_q6b(client, sample_rows):
@@ -134,20 +126,6 @@ def main():
           f"cn={cres.partition.to_dict()['n_confident_neg']}")
     profile["dase_partition"] = cres.partition.to_dict() | {"confident_pos_airlines": cp_a}
 
-    if SKIP_BASELINE:
-        bcost = PAPER_BQ_Q6b["cost_usd"]; bwall = PAPER_BQ_Q6b["latency_s"]
-        bscore = PAPER_BQ_Q6b["score"]; bcalls = n; b_a = None; bslot = None
-    else:
-        bdf, bwall, bslot, bsql = run_baseline(client)
-        b_a = bdf["Airlines"].tolist(); bcalls = n; bcost = per_row * n
-        bp_v, br_v, bscore = f1_set(b_a, gt)
-        print(f"  baseline {len(b_a)} airlines, F1={bscore:.4f} P={bp_v:.4f} R={br_v:.4f}, wall={bwall:.2f}s")
-        profile["baseline"] = {
-            "method": "verbatim BQ q6b.sql", "sql": bsql, "result_airlines": b_a,
-            "score": {"f1": bscore, "precision": bp_v, "recall": br_v},
-            "latency_breakdown": {"wall_s": bwall, "slot_ms": bslot},
-            "cost_breakdown": {"n_llm_calls": bcalls, "per_row_cost_usd": per_row, "total_cost_usd": bcost},
-        }
 
     cascade_a = sorted(set(cp_a) | set(bq_pass))
     cp_v, cr_v, cscore = f1_set(cascade_a, gt)
@@ -165,31 +143,7 @@ def main():
         "totals": {"wall_s": cas_wall, "slot_ms_bq_total": cas_slot,
                    "cost_usd": cas_cost, "n_llm_calls": n_cas},
     }
-    paper_per_call = PAPER_BQ_Q6b["cost_usd"] / PAPER_BQ_Q6b["n_calls"]
-    cas_cost_rs = paper_per_call * n_cas
-    cas_lat_rs = PAPER_BQ_Q6b["latency_s"] * n_cas / PAPER_BQ_Q6b["n_calls"] + 1.25 + 2.5
-    profile["comparison"] = {
-        "score": {"paper_BQ": PAPER_BQ_Q6b["score"], "paper_DASE_NN": PAPER_DASE_NN_Q6b["score"],
-                   "ours_BQ": bscore, "ours_cascade": cscore},
-        "wall_s": {"paper_BQ": PAPER_BQ_Q6b["latency_s"], "paper_DASE_NN": PAPER_DASE_NN_Q6b["latency_s"],
-                    "ours_BQ": PAPER_BQ_Q6b["latency_s"], "ours_cascade": cas_lat_rs},
-        "cost_usd": {"paper_BQ": PAPER_BQ_Q6b["cost_usd"], "paper_DASE_NN": PAPER_DASE_NN_Q6b["cost_usd"],
-                      "ours_BQ": PAPER_BQ_Q6b["cost_usd"], "ours_cascade": cas_cost_rs},
-        "n_llm_calls": {"paper_BQ": PAPER_BQ_Q6b["n_calls"], "paper_DASE_NN": 0,
-                         "ours_BQ": PAPER_BQ_Q6b["n_calls"], "ours_cascade": n_cas},
-    }
-    if not SKIP_BASELINE:
-        profile["_ps_our_actual_bq"] = profile.pop("baseline")
     write_profile(profile, PROFILE_PATH)
-    print_summary(
-        "MMQA Q6b (rescaled)",
-        columns=["paper BQ", "ours BQ", "ours cascade"],
-        rows=[
-            ("score (F1)", [PAPER_BQ_Q6b["score"], bscore, cscore], ".2f"),
-            ("cost ($)",   [PAPER_BQ_Q6b["cost_usd"], None, cas_cost_rs], ".4f"),
-            ("#LLM calls", [PAPER_BQ_Q6b["n_calls"], bcalls, n_cas], "d"),
-        ],
-    )
 
 
 if __name__ == "__main__":

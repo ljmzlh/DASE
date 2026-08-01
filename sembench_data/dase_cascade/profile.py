@@ -1,18 +1,12 @@
-"""Profile builder + write + 4-column comparison printer.
+"""Build and write measured DASE cascade profiles.
 
-Existing scripts hand-roll a JSON with ~10 standard fields and a print-summary
-block. This module gives:
+This module provides the shared profile metadata and JSON serialization used
+by the SemBench cascade scripts:
 
   prof = build_profile(scenario, query_id, scale_factor, ...)
   prof["calibration"] = cal.to_dict()
-  prof["baseline"]    = ...
   prof["cascade"]     = ...
-  prof["comparison"]  = ...
   write_profile(prof, "outputs/Q5.json")
-  print_summary("Wildlife Q5", paper={...}, baseline={...}, cascade={...})
-
-Schema is identical to existing outputs/QN.json files so eval notebooks /
-build_cascade_summary.py keep working unchanged.
 """
 import json
 import os
@@ -68,32 +62,3 @@ def _json_default(o):
     if isinstance(o, set):
         return sorted(o)
     raise TypeError(f"not JSON serializable: {type(o).__name__}")
-
-
-def print_summary(
-    title: str,
-    *, columns,                     # list[str], e.g. ["paper BQ", "ours BQ", "ours cascade"]
-    rows,                           # list[(label, [v1, v2, ...]) or (label, [v1, ...], fmt)]
-) -> None:
-    """Render a small comparison table — intentionally minimal vs the
-    bespoke string-formatting blocks in each script."""
-    print(f"\n=== Summary — {title} ===")
-    headers = ["metric"] + list(columns)
-    print("  ".join(f"{h:>14}" for h in headers))
-    for entry in rows:
-        if len(entry) == 2:
-            label, vals = entry
-            fmt = "{}"
-        else:
-            label, vals, fmt = entry
-        cells = [label] + [_fmt_cell(v, fmt) for v in vals]
-        print("  ".join(f"{c:>14}" for c in cells))
-
-
-def _fmt_cell(v, fmt: str) -> str:
-    if v is None:
-        return "-"
-    try:
-        return format(v, fmt) if fmt and fmt != "{}" else format(v)
-    except (ValueError, TypeError):
-        return str(v)

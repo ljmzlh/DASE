@@ -1,5 +1,6 @@
 # core (DASE imdb/molecule workloads)
 psycopg>=3.1
+psycopg2-binary>=2.9
 pgvector>=0.2
 pyarrow>=14
 numpy>=1.24
