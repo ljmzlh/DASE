@@ -178,14 +178,19 @@ The Table 4 script builds the SemJI pair table of `imdb_t1_hnsw × imdb_t2_hnsw`
 on `actor_director_emb` by default (τ = 0.5, ef_search = 40). `--methods` picks
 the rows: `exact`, `iterative`, `batched`, `vectorized`, and `shared`, the
 shared traversal of §1.2, whose time includes its k-means ordering step.
-Recall is reported against `exact` when it runs in the same invocation. On the
-full table `exact` takes over an hour; `--left-limit N` restricts the left side
-to its first N rows.
+Recall is reported against `exact` when it runs in the same invocation.
 
 ```bash
+# all five rows with recall; exact alone takes over an hour on the full table
+python -m experiments.semji_construction
+# time only
 python -m experiments.semji_construction --methods vectorized shared
-python -m experiments.semji_construction --methods exact vectorized shared --left-limit 1000
 ```
+
+`--left-limit N` restricts the left side to its first N rows. That is fine for
+the four SQL methods but not for `shared`: its k-means groups need the whole
+left table, and on a sparse subset the warm starts land far from the probe (on
+the first 500 rows its recall drops to 0.71).
 
 ---
 

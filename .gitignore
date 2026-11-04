@@ -17,6 +17,9 @@ batch_hnsw/*.o
 batch_hnsw/*.bc
 batch_hnsw/*.so
 
+# SemJI pair TSVs written by ours.ti.ti_build / build_join_index_A_B
+/ours/ti/ti_cache/
+
 # psql parquets — produced by dump_psql_to_parquet.py or downloaded from HF
 /psql_dump/
 
