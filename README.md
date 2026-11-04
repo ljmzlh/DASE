@@ -17,24 +17,61 @@ ablations.
 
 ---
 
-## 1. Download & set up env
+## 1. Set up the environment
 
-Download this repository from <https://anonymous.4open.science/r/DASE-2C61/>, unpack it, and run the commands below from its root.
+Download this repository from <https://anonymous.4open.science/r/DASE-2C61/> and unpack it. Then set up the environment in one of two ways:
+- **Docker (§1.1).** One image holds PostgreSQL with both DASE extensions, the Python dependencies and the code. You only need Docker.
+- **Manual install (§1.2).** You install the Python dependencies, a PostgreSQL server and the two extensions yourself.
+
+The commands in §2 and §3 run from the repository root. With Docker, run them through `docker exec dase`, as shown in §1.1.
+
+### 1.1 Docker
+
+The `Dockerfile` at the repository root builds one image that stands in for the venv, the PostgreSQL server and the two extensions of §1.2. It contains:
+- PostgreSQL 18 with the pgvector fork and `dase_batch_hnsw`. The runner is the superuser `postgres`.
+- This repository at `/dase`.
+- The Python dependencies, pinned in `docker/requirements.txt` to the versions behind the paper's numbers. The image runs Python 3.13; the paper's environment ran 3.11.
+
+The data is not in the image. The container runs the server, and you run DASE commands in it with `docker exec`; §2 then downloads the data and loads it into the volume that holds the database.
+
+```bash
+docker build -t dase .
+
+docker run -d --name dase --shm-size=8g -v dase-pg:/var/lib/postgresql dase
+docker exec dase python setup_data.py --skip-bq                                  # §2
+docker exec dase python -m ours.sys imdb_data/workload/w1/w1_queries_100.json    # §3
+```
+
+- **Shared memory.** Keep `--shm-size` above `maintenance_work_mem` (4GB). Parallel HNSW builds keep the graph in `/dev/shm`, and Docker's 64MB default makes them fail.
+- **Server settings.** They are in `docker/dase.conf` and match the paper's server except two cache sizes: `shared_buffers` is 4GB (the paper used 20GB) and `effective_cache_size` is 16GB (the paper used 60GB). To use the paper's values:
+  ```bash
+  docker exec dase psql -h localhost -c "ALTER SYSTEM SET shared_buffers = '20GB'"
+  docker restart dase
+  ```
+- **CPU flags.** The C code is compiled without `-march=native`, so the image runs on any x86-64 CPU. `docker build --build-arg OPTFLAGS=-march=native -t dase .` compiles it for the build machine, as in §1.2.1.
+- **Where things are stored.** The database lives in volume `dase-pg` and survives `docker rm`. Downloads, SemJI pair files and results go under `/dase` in the container. Copy results out with `docker cp dase:/dase/imdb_data/results .`, or point `--output` at a bind-mounted directory.
+- **Disk.** Plan for about 100 GB under Docker's data root:
+  - The imdb database is 19 GB.
+  - The molecule database is about 55 GB; its τ = 0.7 SemJI table alone is 50 GB.
+  - WAL takes up to 16 GB (`max_wal_size`).
+  - Downloads and SemJI pair files take about 10 GB. After §2 you can free 4.5 GB with `docker exec dase rm -rf /dase/psql_dump /root/.cache/huggingface`.
+- **Not covered.** The BigQuery cascade (§3.3) needs your GCP credentials and an upstream SemBench checkout, which the image does not contain. Mount both and pass `SEMBENCH_SRC` and `GCP_PROJECT` with `-e`.
+- **Connecting from outside.** Publish the port and set a password on the first `docker run`: `-p 5432:5432 -e POSTGRES_PASSWORD=...`. Inside the container, connections need no password.
+
+### 1.2 Manual install
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-To skip the rest of this section, use the Docker image instead (§1.3).
-
 You also need:
 - A local **PostgreSQL 15+** server. The runner role must be a **superuser** (the role a fresh `initdb` creates is one). `setup_data.py` and the SemJI scripts run `CREATE EXTENSION` for two C extensions that are not marked trusted (`vector` and `dase_batch_hnsw`), and the Table 4 script sets `log_min_messages`; both need a superuser.
-- The **DASE pgvector fork** installed as the `vector` extension (§1.1).
-- The **`dase_batch_hnsw`** extension (§1.2), for the shared-traversal row of Table 4 and `setup_data.py --ti-method shared`.
+- The **DASE pgvector fork** installed as the `vector` extension (§1.2.1).
+- The **`dase_batch_hnsw`** extension (§1.2.2), for the shared-traversal row of Table 4 and `setup_data.py --ti-method shared`.
 - For the SemBench cascade track, a GCP project with BigQuery enabled.
 
-### 1.1 Install the DASE pgvector fork
+#### 1.2.1 Install the DASE pgvector fork
 
 DASE uses extra HNSW machinery not in upstream pgvector — the `<->#` filtered-search operator, the `hnsw.id_map_table` GUC, the `hnsw.enable_2hop` GUC, and the `hnsw_set_tid_map_table()` SQL function. Build and install the fork **before** running `setup_data.py`:
 
@@ -58,9 +95,9 @@ WHERE oprname IN ('<->#', '<->@');
 
 If `<->#` is missing, the standard pgvector got installed instead — uninstall it (`DROP EXTENSION vector CASCADE` on each db), `make uninstall` upstream pgvector, and rebuild the fork.
 
-### 1.2 Install the `dase_batch_hnsw` extension
+#### 1.2.2 Install the `dase_batch_hnsw` extension
 
-`batch_hnsw/` implements the shared traversal used to build SemJI (the last row of paper Table 4): one C function runs every HNSW range probe over the left rows in k-means locality order, and each probe after the first in a group starts from the previous probe's nearest nodes instead of descending the upper layers. It compiles the fork's HNSW code from `pgvector/`, so build it from the same checkout and against the same server as §1.1:
+`batch_hnsw/` implements the shared traversal used to build SemJI (the last row of paper Table 4): one C function runs every HNSW range probe over the left rows in k-means locality order, and each probe after the first in a group starts from the previous probe's nearest nodes instead of descending the upper layers. It compiles the fork's HNSW code from `pgvector/`, so build it from the same checkout and against the same server as §1.2.1:
 
 ```bash
 cd batch_hnsw
@@ -75,39 +112,6 @@ CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw;
 SELECT proname FROM pg_proc WHERE pronamespace = 'bh'::regnamespace;
 -- expect range_join_all and last_stats
 ```
-
-### 1.3 Docker image
-
-The `Dockerfile` at the repository root builds one image that stands in for the venv, the PostgreSQL server and the two extensions of §1–§1.2. It contains:
-- PostgreSQL 18 with the pgvector fork and `dase_batch_hnsw`. The runner is the superuser `postgres`.
-- This repository at `/dase`.
-- The Python dependencies, pinned in `docker/requirements.txt` to the versions behind the paper's numbers. The image runs Python 3.13; the paper's environment ran 3.11.
-
-The data is not in the image. The container runs the server, and you run DASE commands in it with `docker exec`; §2 then downloads the data and loads it into the volume that holds the database.
-
-```bash
-docker build -t dase .
-
-docker run -d --name dase --shm-size=8g -v dase-pg:/var/lib/postgresql dase
-docker exec dase python setup_data.py --skip-bq                                  # §2
-docker exec dase python -m ours.sys imdb_data/workload/w1/w1_queries_100.json    # §3
-```
-
-- **Shared memory.** Keep `--shm-size` above `maintenance_work_mem` (4GB). Parallel HNSW builds keep the graph in `/dev/shm`, and Docker's 64MB default makes them fail.
-- **Server settings.** They are in `docker/dase.conf` and match the paper's server except two cache sizes: `shared_buffers` is 4GB (the paper used 20GB) and `effective_cache_size` is 16GB (the paper used 60GB). To use the paper's values:
-  ```bash
-  docker exec dase psql -h localhost -c "ALTER SYSTEM SET shared_buffers = '20GB'"
-  docker restart dase
-  ```
-- **CPU flags.** The C code is compiled without `-march=native`, so the image runs on any x86-64 CPU. `docker build --build-arg OPTFLAGS=-march=native -t dase .` compiles it for the build machine, as in §1.1.
-- **Where things are stored.** The database lives in volume `dase-pg` and survives `docker rm`. Downloads, SemJI pair files and results go under `/dase` in the container. Copy results out with `docker cp dase:/dase/imdb_data/results .`, or point `--output` at a bind-mounted directory.
-- **Disk.** Plan for about 100 GB under Docker's data root:
-  - The imdb database is 19 GB.
-  - The molecule database is about 55 GB; its τ = 0.7 SemJI table alone is 50 GB.
-  - WAL takes up to 16 GB (`max_wal_size`).
-  - Downloads and SemJI pair files take about 10 GB. After §2 you can free 4.5 GB with `docker exec dase rm -rf /dase/psql_dump /root/.cache/huggingface`.
-- **Not covered.** The BigQuery cascade (§3.3) needs your GCP credentials and an upstream SemBench checkout, which the image does not contain. Mount both and pass `SEMBENCH_SRC` and `GCP_PROJECT` with `-e`.
-- **Connecting from outside.** Publish the port and set a password on the first `docker run`: `-p 5432:5432 -e POSTGRES_PASSWORD=...`. Inside the container, connections need no password.
 
 ---
 
@@ -145,7 +149,7 @@ python setup_data.py --skip-download --skip-bq --psql-dbs '' \
 
 `setup_data.py` does, in order:
 1. Pull HF dataset → `psql_dump/` (parquets) + `sembench_data/<scenario>/`.
-2. `CREATE DATABASE imdb` and `CREATE DATABASE molecule`; `CREATE EXTENSION vector`; `CREATE TABLE` + `COPY` parquet rows; build btree/gin/HNSW indexes; build `<table>_id_map` lookup tables for the four `*_hnsw` base tables. Then build the SemJI / TI tables (`ti_imdb_t1_imdb_t2_{0.5,0.6}`, `ti_facts_50k_paper_{0.5,0.6,0.7}`) — these back W5–W8 cross-table joins. The molecule τ=0.7 TI is ~50 GB and slow; pass `--skip-ti` to skip if you only need W1–W4. By default the TI tables are built with `ours.ti.ti_build --method directhnsw_range`, the build behind the paper's W5–W8 results. `--ti-method shared` builds them with the shared traversal instead (`ours.ti.build_join_index_A_B`, needs §1.2): faster, but its approximate search returns a slightly different set of pairs.
+2. `CREATE DATABASE imdb` and `CREATE DATABASE molecule`; `CREATE EXTENSION vector`; `CREATE TABLE` + `COPY` parquet rows; build btree/gin/HNSW indexes; build `<table>_id_map` lookup tables for the four `*_hnsw` base tables. Then build the SemJI / TI tables (`ti_imdb_t1_imdb_t2_{0.5,0.6}`, `ti_facts_50k_paper_{0.5,0.6,0.7}`) — these back W5–W8 cross-table joins. The molecule τ=0.7 TI is ~50 GB and slow; pass `--skip-ti` to skip if you only need W1–W4. By default the TI tables are built with `ours.ti.ti_build --method directhnsw_range`, the build behind the paper's W5–W8 results. `--ti-method shared` builds them with the shared traversal instead (`ours.ti.build_join_index_A_B`, needs §1.2.2): faster, but its approximate search returns a slightly different set of pairs.
 3. If requested, load NFCorpus's paper table and two real link relations.
 4. Run scenario `setup_bq.py` for `wildlife / mmqa / cars` (the other two cascade scenarios create BQ tables on first run).
 
@@ -211,7 +215,7 @@ program.
 The Table 4 script builds the SemJI pair table of `imdb_t1_hnsw × imdb_t2_hnsw`
 on `actor_director_emb` by default (τ = 0.5, ef_search = 40). `--methods` picks
 the rows: `exact`, `iterative`, `batched`, `vectorized`, and `shared`, the
-shared traversal of §1.2, whose time includes its k-means ordering step.
+shared traversal of §1.2.2, whose time includes its k-means ordering step.
 Recall is reported against `exact` when it runs in the same invocation.
 
 ```bash

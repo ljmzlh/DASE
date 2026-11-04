@@ -3,7 +3,7 @@
 # DASE in one image: PostgreSQL 18 with the DASE pgvector fork and the
 # dase_batch_hnsw extension, plus this repository and its Python dependencies.
 # The container runs the server; DASE commands run through `docker exec`.
-# See README §1.3.
+# See README §1.1.
 #
 #   docker build -t dase .
 

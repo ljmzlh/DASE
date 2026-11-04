@@ -13,7 +13,7 @@ left rows can share their way into B's graph:
   --order kmeans  k-means groups of ~--group_size rows, chained nearest-neighbour (default)
   --order id      rows by id, no groups (probe only): the existing row order
 
-l2 only. Needs the dase_batch_hnsw extension installed on the server (README §1.2);
+l2 only. Needs the dase_batch_hnsw extension installed on the server (README §1.2.2);
 each run does CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw, which needs a superuser.
 
 The TI table defaults to ti_{left}_{right}_{threshold}_bh_{mode}, so the table of the
@@ -59,7 +59,7 @@ def install_functions(conn) -> None:
             cur.execute("CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw")
     except psycopg2.Error as e:
         raise SystemExit(f"CREATE EXTENSION dase_batch_hnsw failed: {str(e).strip()}\n"
-                         "Install it from batch_hnsw/ and connect as a superuser (README §1.2).")
+                         "Install it from batch_hnsw/ and connect as a superuser (README §1.2.2).")
 
 
 def find_l2_hnsw_index(conn, table: str, vec_col: str) -> str:

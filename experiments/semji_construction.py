@@ -396,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
                 except psycopg.Error as error:
                     raise SystemExit(
                         f"CREATE EXTENSION dase_batch_hnsw failed: {error}\n"
-                        "Install it from batch_hnsw/ (README §1.2), or leave out --methods shared."
+                        "Install it from batch_hnsw/ (README §1.2.2), or leave out --methods shared."
                     )
         conn.commit()
         for method in args.methods:
