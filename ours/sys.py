@@ -155,7 +155,7 @@ def run_w2(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
         query_k=k,
         id_col=ID_COL,
         text_col=TEXT_COL,
-        hnsw_ef=kwargs.get("w2_ef"),
+        hnsw_ef=(kwargs.get("w2_ef") or 1000),
     )
     prof["fss_init"] = time.perf_counter() - t0
     prof["fss_init.table_size"] = fss.profile["init_table_size"]
@@ -2970,7 +2970,7 @@ def main():
     parser.add_argument("--no-adaptive", action="store_true",
                         help="Disable adaptive stream extension for W3")
     parser.add_argument("--w2-ef", type=int, default=None, metavar="EF",
-                        help="W2 HNSW ef_search; controls its recall-throughput operating point.")
+                        help="W2 HNSW ef_search (default 1000); controls its recall-throughput operating point.")
     parser.add_argument("--w2-sigma-low", type=float, default=None, metavar="S",
                         help="W2 FSS crossover between predicate-first and ANN execution.")
     parser.add_argument("--w5-pf", type=float, default=None, metavar="F",
