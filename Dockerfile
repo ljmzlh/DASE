@@ -36,8 +36,9 @@ RUN python3 -m venv /opt/venv \
  && rm /tmp/requirements.txt
 
 COPY docker/dase.conf /etc/postgresql/dase.conf
-COPY docker/initdb-dase.sh /docker-entrypoint-initdb.d/10-dase.sh
-COPY docker/entrypoint.sh /usr/local/bin/dase-entrypoint.sh
+# --chmod: a downloaded archive of the repository may not keep the execute bits.
+COPY --chmod=755 docker/initdb-dase.sh /docker-entrypoint-initdb.d/10-dase.sh
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/dase-entrypoint.sh
 
 # The code connects to postgresql://localhost/<db> without a user name;
 # PGUSER makes that the superuser the official image creates.

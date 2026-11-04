@@ -17,12 +17,11 @@ ablations.
 
 ---
 
-## 1. Clone & set up env
+## 1. Download & set up env
+
+Download this repository from <https://anonymous.4open.science/r/DASE-2C61/>, unpack it, and run the commands below from its root.
 
 ```bash
-git clone https://github.com/ljmzlh/DASE.git dase
-cd dase
-
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
