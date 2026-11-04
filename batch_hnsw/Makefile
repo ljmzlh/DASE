@@ -9,9 +9,11 @@ DATA = dase_batch_hnsw--1.0.sql
 PG_CONFIG ?= pg_config
 
 # Same optimization flags as ../pgvector/Makefile, so the traversal code here
-# matches the one compiled into vector.so
+# matches the one compiled into vector.so. To compile for portability (the
+# Docker image does), run: make OPTFLAGS=""
+OPTFLAGS = -march=native
 PG_CPPFLAGS = -I$(CURDIR)/../pgvector/src -I$(CURDIR)/compat
-PG_CFLAGS += -march=native -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
+PG_CFLAGS += $(OPTFLAGS) -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)

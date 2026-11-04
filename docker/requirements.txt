@@ -1,0 +1,17 @@
+# ../requirements.txt pinned to the versions in the environment behind the
+# paper's numbers.
+psycopg[binary]==3.3.3
+psycopg2-binary==2.9.11
+pgvector==0.4.2
+pyarrow==23.0.1
+numpy==2.4.2
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.9.0
+tqdm==4.67.3
+matplotlib==3.10.8
+huggingface_hub==1.6.0
+google-cloud-bigquery==3.41.0
+google-cloud-storage==3.10.1
+db-dtypes==1.5.1
+openai==2.26.0

@@ -27,6 +27,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+To skip the rest of this section, use the Docker image instead (§1.3).
+
 You also need:
 - A local **PostgreSQL 15+** server. The runner role must be a **superuser** (the role a fresh `initdb` creates is one). `setup_data.py` and the SemJI scripts run `CREATE EXTENSION` for two C extensions that are not marked trusted (`vector` and `dase_batch_hnsw`), and the Table 4 script sets `log_min_messages`; both need a superuser.
 - The **DASE pgvector fork** installed as the `vector` extension (§1.1).
@@ -74,6 +76,39 @@ CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw;
 SELECT proname FROM pg_proc WHERE pronamespace = 'bh'::regnamespace;
 -- expect range_join_all and last_stats
 ```
+
+### 1.3 Docker image
+
+The `Dockerfile` at the repository root builds one image that stands in for the venv, the PostgreSQL server and the two extensions of §1–§1.2. It contains:
+- PostgreSQL 18 with the pgvector fork and `dase_batch_hnsw`. The runner is the superuser `postgres`.
+- This repository at `/dase`.
+- The Python dependencies, pinned in `docker/requirements.txt` to the versions behind the paper's numbers. The image runs Python 3.13; the paper's environment ran 3.11.
+
+The data is not in the image. The container runs the server, and you run DASE commands in it with `docker exec`; §2 then downloads the data and loads it into the volume that holds the database.
+
+```bash
+docker build -t dase .
+
+docker run -d --name dase --shm-size=8g -v dase-pg:/var/lib/postgresql dase
+docker exec dase python setup_data.py --skip-bq                                  # §2
+docker exec dase python -m ours.sys imdb_data/workload/w1/w1_queries_100.json    # §3
+```
+
+- **Shared memory.** Keep `--shm-size` above `maintenance_work_mem` (4GB). Parallel HNSW builds keep the graph in `/dev/shm`, and Docker's 64MB default makes them fail.
+- **Server settings.** They are in `docker/dase.conf` and match the paper's server except two cache sizes: `shared_buffers` is 4GB (the paper used 20GB) and `effective_cache_size` is 16GB (the paper used 60GB). To use the paper's values:
+  ```bash
+  docker exec dase psql -h localhost -c "ALTER SYSTEM SET shared_buffers = '20GB'"
+  docker restart dase
+  ```
+- **CPU flags.** The C code is compiled without `-march=native`, so the image runs on any x86-64 CPU. `docker build --build-arg OPTFLAGS=-march=native -t dase .` compiles it for the build machine, as in §1.1.
+- **Where things are stored.** The database lives in volume `dase-pg` and survives `docker rm`. Downloads, SemJI pair files and results go under `/dase` in the container. Copy results out with `docker cp dase:/dase/imdb_data/results .`, or point `--output` at a bind-mounted directory.
+- **Disk.** Plan for about 100 GB under Docker's data root:
+  - The imdb database is 19 GB.
+  - The molecule database is about 55 GB; its τ = 0.7 SemJI table alone is 50 GB.
+  - WAL takes up to 16 GB (`max_wal_size`).
+  - Downloads and SemJI pair files take about 10 GB. After §2 you can free 4.5 GB with `docker exec dase rm -rf /dase/psql_dump /root/.cache/huggingface`.
+- **Not covered.** The BigQuery cascade (§3.3) needs your GCP credentials and an upstream SemBench checkout, which the image does not contain. Mount both and pass `SEMBENCH_SRC` and `GCP_PROJECT` with `-e`.
+- **Connecting from outside.** Publish the port and set a password on the first `docker run`: `-p 5432:5432 -e POSTGRES_PASSWORD=...`. Inside the container, connections need no password.
 
 ---
 

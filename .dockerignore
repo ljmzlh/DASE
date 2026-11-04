@@ -1,0 +1,36 @@
+.git
+.claude
+.venv
+**/__pycache__
+**/*.pyc
+*.pdf
+Dockerfile
+.dockerignore
+
+# build artifacts; the image compiles its own
+pgvector/vector.so
+pgvector/src/*.o
+pgvector/src/*.bc
+pgvector/sql/vector--0.8.5.sql
+batch_hnsw/*.o
+batch_hnsw/*.bc
+batch_hnsw/*.so
+
+# runtime data and outputs (see .gitignore)
+psql_dump/
+ours/ti/ti_cache/
+results/
+nfcorpus_data/psql/
+imdb_data/logs/
+molecule_data/logs/
+imdb_data/results/**/results_*.json
+molecule_data/results/**/results_*.json
+sembench_data/*/data/
+sembench_data/*/cache/
+sembench_data/*/bq_data/
+sembench_data/*/outputs/Q*.json
+sembench_data/*/outputs/cascade_summary.csv
+sembench_data/movie/gt_Q10.csv
+sembench_data/movie/Q3.csv
+*.pkl
+*.npz
