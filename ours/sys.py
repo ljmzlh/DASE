@@ -39,7 +39,7 @@ from pgvector.psycopg import register_vector
 from ours.fss import FilteredScoreStreamer
 from ours.jim import jim_get_valid_ids
 from ours.msa import build_msa_from_query, synthesize
-from ours.utils import find_ti_table, quote as _quote, METRIC_OP
+from ours.utils import find_ti_table, ti_table_tau, quote as _quote, METRIC_OP
 
 DATABASE_URL = None  # set by main() from workload["dataset"]
 DATASET = None  # set by main() from workload["dataset"]; used by setting loaders
@@ -927,8 +927,13 @@ def _run_w5_index_topk(
     partner_rate: float,
     pf: float,
     prof: Dict[str, Any],
+    overflow: bool = False,
 ) -> List[Tuple]:
-    """W5 strategy=index_topk: HNSW top-K (starting at K/partner_rate) + batch TI post-filter, double on failure."""
+    """W5 strategy=index_topk: HNSW top-K (starting at K/partner_rate) + batch TI post-filter, double on failure.
+
+    When ``overflow`` is set the TI table does not cover the query radius, so seeds
+    it reports no partner for are re-checked against the base engine.
+    """
     import math
 
     scoring = query["scoring"]
@@ -960,6 +965,33 @@ def _run_w5_index_topk(
         f'  LIMIT 1'
         f') t'
     )
+
+    # Outer-band fallback: nearest partner straight from the base engine, same
+    # existence check the TI lookup does but without the build-threshold ceiling.
+    probe_sql = None
+    if overflow:
+        join_spec = query["join"]
+        left_name = join_spec["table_left"].lower()
+        join_op = METRIC_OP.get(join_spec.get("metric", "l2"), "<->").replace("%", "%%")
+        seed_join_col = join_spec["embed_left"] if seed_table == left_name else join_spec["embed_right"]
+        partner_join_col = join_spec["embed_right"] if seed_table == left_name else join_spec["embed_left"]
+        partner_rel = _resolve_hnsw_table(partner_table)
+        probe_sql = (
+            f'SELECT s.id, p.pid '
+            f'FROM unnest(%(ids)s) AS s(id) '
+            f'JOIN {_quote(seed_rel)} sd ON sd.{_quote(seed_pk)} = s.id '
+            f'CROSS JOIN LATERAL ('
+            f' SELECT t.{_quote(partner_pk)} AS pid,'
+            f' (t.{_quote(partner_join_col)} {join_op} sd.{_quote(seed_join_col)}) AS d'
+            f' FROM {_quote(partner_rel)} t'
+            f' ORDER BY t.{_quote(partner_join_col)} {join_op} sd.{_quote(seed_join_col)}'
+            f' LIMIT 1'
+            f') p '
+            f'WHERE p.d <= %(tau)s'
+        )
+        prof["fallback_probe"] = 0.0
+        prof["fallback_probe_seeds"] = 0
+        prof["fallback_probe_hits"] = 0
 
     limit_outer = int(math.ceil(k / max(partner_rate, 0.01)))
     out: List[Tuple] = []
@@ -994,6 +1026,21 @@ def _run_w5_index_topk(
         partner_map: Dict[int, int] = {}
         for s_id, p_id in ti_rows:
             partner_map[s_id] = p_id
+
+        if probe_sql is not None:
+            miss_ids = [c[0] for c in new_cands if c[0] not in partner_map]
+            if miss_ids:
+                t0 = time.perf_counter()
+                # Runs on the HNSW connection, not the TI one — this is an ANN probe.
+                with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+                    cur.execute("SET LOCAL enable_seqscan = off")
+                    cur.execute(probe_sql, {"ids": miss_ids, "tau": tau})
+                    probe_rows = cur.fetchall()
+                prof["fallback_probe"] += time.perf_counter() - t0
+                prof["fallback_probe_seeds"] += len(miss_ids)
+                prof["fallback_probe_hits"] += len(probe_rows)
+                for s_id, p_id in probe_rows:
+                    partner_map[s_id] = p_id
 
         for cand_id, cand_title, score_dist in new_cands:
             if cand_id in partner_map:
@@ -1048,9 +1095,21 @@ def run_w5(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
     ti_table = find_ti_table(conn, t_left, t_right, tau)
     prof["ti_lookup"] = time.perf_counter() - t0
 
+    # A TI table holds no pair beyond its own build threshold, so when the query
+    # asks for a wider radius the index alone cannot answer (tau_ti, tau].
+    ti_tau = ti_table_tau(ti_table)
+    overflow = ti_tau is not None and tau > ti_tau
+    prof["ti_table_tau"] = ti_tau
+    prof["ti_overflow"] = overflow
+
     # Choose strategy
     partner_rate = float(query.get("partner_rate", 1.0))
     strategy = "select_distinct" if partner_rate < rate_threshold else "index_topk"
+    if overflow and strategy == "select_distinct":
+        # select_distinct reads its valid-seed set straight out of the TI table and
+        # has no bounded candidate set to probe, so route overflow to index_topk.
+        strategy = "index_topk"
+        prof["overflow_strategy_switch"] = True
     prof["strategy"] = strategy
     prof["partner_rate"] = partner_rate
 
@@ -1071,7 +1130,7 @@ def run_w5(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
         else:
             out = _run_w5_index_topk(
                 conn, syn_conn, query, ti_table, seed_table, partner_table,
-                seed_side, tau, partner_rate, pf, prof,
+                seed_side, tau, partner_rate, pf, prof, overflow=overflow,
             )
     finally:
         if owns_syn:
@@ -1141,6 +1200,125 @@ def _synthesize_w6(
     return None
 
 
+W6_BAND_BATCH = 50
+W6_BAND_MAX_PROBES = 1000
+
+
+def _w6_pred_sql(preds: List[Dict[str, Any]], prefix: str) -> Tuple[List[str], Dict[str, Any]]:
+    """Predicate SQL against a base table, whose columns carry no TI-style prefix."""
+    parts: List[str] = []
+    params: Dict[str, Any] = {}
+    for i, p in enumerate(preds):
+        key = f"{prefix}{i}"
+        if p["operator"] == "in":
+            parts.append(f'{_quote(p["attribute"])} = ANY(%({key})s)')
+            params[key] = list(p["value"])
+        else:
+            parts.append(f'{_quote(p["attribute"])} {p["operator"]} %({key})s')
+            params[key] = p["value"]
+    return parts, params
+
+
+def _w6_band_fill(
+    conn: psycopg.Connection,
+    query: Dict[str, Any],
+    seed_table: str,
+    partner_table: str,
+    tau: float,
+    ti_tau: float,
+    seed_preds: List[Dict[str, Any]],
+    partner_preds: List[Dict[str, Any]],
+    sig: Dict[str, Any],
+    k: int,
+    scored: List[Tuple],
+    prof: Dict[str, Any],
+) -> List[Tuple]:
+    """Recover Case C pairs whose join distance lands in the uncovered band.
+
+    Case C draws its whole candidate set out of a TI table, so a seed whose only
+    qualifying partner sits in ``(ti_tau, tau]`` never appears at all.  Regenerate
+    candidates filter-first -- one predicate scan over the seed table, ranked by
+    score -- then probe in score order until no unprobed seed could still reach
+    the top-K.
+    """
+    join_spec = query["join"]
+    left_name = join_spec["table_left"].lower()
+    join_op = METRIC_OP.get(join_spec.get("metric", "l2"), "<->").replace("%", "%%")
+    seed_join_col = join_spec["embed_left"] if seed_table == left_name else join_spec["embed_right"]
+    partner_join_col = join_spec["embed_right"] if seed_table == left_name else join_spec["embed_left"]
+    seed_rel = _resolve_hnsw_table(seed_table)
+    partner_rel = _resolve_hnsw_table(partner_table)
+    seed_pk = _table_pk(seed_table)
+    partner_pk = _table_pk(partner_table)
+    dist_op, qe_val, cast = _signal_dist_expr(sig)
+
+    seed_parts, seed_params = _w6_pred_sql(seed_preds, "bs")
+    partner_parts, partner_params = _w6_pred_sql(partner_preds, "bp")
+    seed_where = (" WHERE " + " AND ".join(seed_parts)) if seed_parts else ""
+    partner_where = (" WHERE " + " AND ".join(partner_parts)) if partner_parts else ""
+
+    t0 = time.perf_counter()
+    cand_sql = (
+        f'SELECT {_quote(seed_pk)}, ({_quote(sig["field"])} {dist_op} %(qv)s{cast}) AS score '
+        f'FROM {_quote(seed_rel)}{seed_where} ORDER BY score'
+    )
+    with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+        cur.execute(cand_sql, {"qv": qe_val, **seed_params})
+        ranked = [(r[0], float(r[1])) for r in cur.fetchall()]
+    prof["band_candidate_scan"] = time.perf_counter() - t0
+    prof["band_candidates"] = len(ranked)
+
+    probe_sql = (
+        f'SELECT s.id, p.pid FROM unnest(%(ids)s) AS s(id) '
+        f'JOIN {_quote(seed_rel)} sd ON sd.{_quote(seed_pk)} = s.id '
+        f'CROSS JOIN LATERAL ('
+        f' SELECT t.{_quote(partner_pk)} AS pid,'
+        f' (t.{_quote(partner_join_col)} {join_op} sd.{_quote(seed_join_col)}) AS d'
+        f' FROM {_quote(partner_rel)} t{partner_where}'
+        f' ORDER BY t.{_quote(partner_join_col)} {join_op} sd.{_quote(seed_join_col)}'
+        f' LIMIT 1'
+        f') p '
+        f'WHERE p.d > %(lo)s AND p.d <= %(hi)s'
+    )
+
+    merged = list(scored)
+    have = {s for s, _, _ in merged}
+    prof["band_probe"] = 0.0
+    prof["band_probe_seeds"] = 0
+    prof["band_probe_hits"] = 0
+    prof["band_stop"] = "exhausted"
+
+    for start in range(0, len(ranked), W6_BAND_BATCH):
+        if prof["band_probe_seeds"] >= W6_BAND_MAX_PROBES:
+            prof["band_stop"] = "cap"
+            break
+        if len(merged) >= k and ranked[start][1] > sorted(m[2] for m in merged)[k - 1]:
+            # Every remaining seed scores worse than the current K-th, so none of
+            # them can enter the answer even if the band holds a partner for it.
+            prof["band_stop"] = "bound"
+            break
+        batch = [(sid, sc) for sid, sc in ranked[start:start + W6_BAND_BATCH] if sid not in have]
+        if not batch:
+            continue
+        t0 = time.perf_counter()
+        with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+            cur.execute(
+                probe_sql,
+                {"ids": [b[0] for b in batch], "lo": ti_tau, "hi": tau, **partner_params},
+            )
+            hits = cur.fetchall()
+        prof["band_probe"] += time.perf_counter() - t0
+        prof["band_probe_seeds"] += len(batch)
+        prof["band_probe_hits"] += len(hits)
+        score_of = dict(batch)
+        for sid, pid in hits:
+            merged.append((sid, pid, score_of[sid]))
+            have.add(sid)
+
+    merged.sort(key=lambda x: x[2])
+    return merged
+
+
 def _run_w6_strategy_c(
     conn: psycopg.Connection,
     query: Dict[str, Any],
@@ -1155,6 +1333,8 @@ def _run_w6_strategy_c(
     k: int,
     prof: Dict[str, Any],
     cand_cap: Optional[int] = None,
+    overflow: bool = False,
+    ti_tau: Optional[float] = None,
 ) -> List[Tuple]:
     """
     Strategy C: direct enumeration when expected_valid_tuples is tiny.
@@ -1207,7 +1387,8 @@ def _run_w6_strategy_c(
     prof["c_ti_query"] = time.perf_counter() - t0
     prof["c_ti_rows"] = len(ti_rows)
 
-    if not ti_rows:
+    band_eligible = overflow and ti_tau is not None
+    if not ti_rows and not band_eligible:
         return []
 
     # For each seed_id, keep the partner with smallest distance
@@ -1239,6 +1420,12 @@ def _run_w6_strategy_c(
         if seed_id in scores:
             scored.append((seed_id, partner_id, scores[seed_id]))
     scored.sort(key=lambda x: x[2])
+
+    if band_eligible and len(scored) < k:
+        scored = _w6_band_fill(
+            conn, query, seed_table, partner_table, tau, ti_tau,
+            seed_preds, partner_preds, sig, k, scored, prof,
+        )
 
     out = []
     for seed_id, partner_id, score in scored[:k]:
@@ -1296,6 +1483,13 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
     prof["ti_lookup"] = time.perf_counter() - t0
     prof["ti_ladder_size"] = len(ti_ladder)
 
+    # No rung of the ladder holds a pair beyond its own build threshold, so a wider
+    # query radius leaves (tau_ti, tau] answerable only by the base engine.
+    ti_tau = ti_table_tau(ti_table)
+    overflow = ti_tau is not None and tau > ti_tau
+    prof["ti_table_tau"] = ti_tau
+    prof["ti_overflow"] = overflow
+
     # Partner selectivity: use precomputed value if available
     precomputed_sel = query.get("precomputed_selectivity", {})
     t0 = time.perf_counter()
@@ -1339,6 +1533,7 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
             seed_preds=seed_preds, partner_preds=partner_preds,
             sig=sig, k=k, prof=prof,
             cand_cap=cand_cap,
+            overflow=overflow, ti_tau=ti_tau,
         )
         prof["total"] = time.perf_counter() - t_total
         def _round(d):
@@ -1381,6 +1576,42 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
     n_synthesize_calls = 0
     n_synthesize_miss = 0
     seed_pk = _table_pk(seed_table)
+
+    # Outer-band fallback: nearest predicate-passing partner from the base engine.
+    # Predicates address the partner table directly here, not the TI table's
+    # prefixed columns that _synthesize_w6 filters on.
+    probe_sql = None
+    probe_params: Dict[str, Any] = {}
+    if overflow:
+        left_name = join_spec["table_left"].lower()
+        join_op = METRIC_OP.get(join_spec.get("metric", "l2"), "<->").replace("%", "%%")
+        seed_join_col = join_spec["embed_left"] if seed_table == left_name else join_spec["embed_right"]
+        partner_join_col = join_spec["embed_right"] if seed_table == left_name else join_spec["embed_left"]
+        pred_parts: List[str] = []
+        for i, p in enumerate(partner_preds):
+            key = f"pp{i}"
+            if p["operator"] == "in":
+                pred_parts.append(f'{_quote(p["attribute"])} = ANY(%({key})s)')
+                probe_params[key] = list(p["value"])
+            else:
+                pred_parts.append(f'{_quote(p["attribute"])} {p["operator"]} %({key})s')
+                probe_params[key] = p["value"]
+        where_preds = (" WHERE " + " AND ".join(pred_parts)) if pred_parts else ""
+        probe_sql = (
+            f'SELECT p.pid FROM {_quote(_resolve_hnsw_table(seed_table))} sd '
+            f'CROSS JOIN LATERAL ('
+            f' SELECT t.{_quote(_table_pk(partner_table))} AS pid,'
+            f' (t.{_quote(partner_join_col)} {join_op} sd.{_quote(seed_join_col)}) AS d'
+            f' FROM {_quote(_resolve_hnsw_table(partner_table))} t'
+            f'{where_preds}'
+            f' ORDER BY t.{_quote(partner_join_col)} {join_op} sd.{_quote(seed_join_col)}'
+            f' LIMIT 1'
+            f') p '
+            f'WHERE sd.{_quote(seed_pk)} = %(seed_id)s AND p.d <= %(tau)s'
+        )
+        prof["fallback_probe"] = 0.0
+        prof["fallback_probe_seeds"] = 0
+        prof["fallback_probe_hits"] = 0
     try:
         while len(out) < k:
             item = fss.next()
@@ -1406,7 +1637,19 @@ def run_w6(conn: psycopg.Connection, query: Dict[str, Any], **kwargs) -> Tuple[L
             n_synthesize_calls += 1
             if partner_id is None:
                 n_synthesize_miss += 1
-                continue
+                if probe_sql is None:
+                    continue
+                t0 = time.perf_counter()
+                # HNSW probe, so it runs on the FSS connection rather than the TI one.
+                with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+                    cur.execute(probe_sql, {**probe_params, "seed_id": seed_id, "tau": tau})
+                    row = cur.fetchone()
+                prof["fallback_probe"] += time.perf_counter() - t0
+                prof["fallback_probe_seeds"] += 1
+                if row is None:
+                    continue
+                partner_id = row[0]
+                prof["fallback_probe_hits"] += 1
 
             if seed_side == "left":
                 out.append((seed_id, partner_id, score))
@@ -1460,11 +1703,18 @@ def run_w7(conn: psycopg.Connection, query: Dict[str, Any], eps: float = 0.1,
     S = max(int(k ** 0.5) + 5, 20)
     S_join = S * S
 
-    # Build streams (sub-profiled internally)
+    # Build streams (sub-profiled internally). Entity streams read only the columns
+    # W7 uses (id, text, predicate columns and the join embedding), in binary format:
+    # parsing every vector column of every streamed row from text was most of W7's
+    # client time.
     streams = _build_w7_streams(conn, signals, predicates, join_spec, prof,
                                 init_stream_fetchKs={"left": S, "right": S, "join": S_join},
                                 precomputed_selectivity=query.get("precomputed_selectivity"),
-                                ti_chunk_step=ti_chunk_step)
+                                ti_chunk_step=ti_chunk_step,
+                                light_mode=True,
+                                keep_vec_cols={"left": [join_spec["embed_left"]],
+                                               "right": [join_spec["embed_right"]]},
+                                binary=True)
 
     # Build score function
     score_f = _build_score_f(agg, weights)
@@ -1494,8 +1744,14 @@ def _build_w7_streams(
     precomputed_selectivity: Optional[Dict[str, float]] = None,
     ti_chunk_step: float = 0.05,
     light_mode: bool = False,
+    keep_vec_cols: Optional[Dict[str, List[str]]] = None,
+    binary: bool = False,
 ) -> Dict[str, Any]:
-    """Build FSS streams for W7 by role: left, right, join."""
+    """Build FSS streams for W7 by role: left, right, join.
+
+    keep_vec_cols: per role, vector columns a light_mode entity stream still reads.
+    binary: entity streams fetch rows in binary format (see FilteredScoreStreamer).
+    """
     from ours.fss import FilteredScoreStreamer
     from ours.ti_stream import TIScoreStream
     from ours.utils import find_ti_table_ladder
@@ -1520,6 +1776,13 @@ def _build_w7_streams(
     ti_ladder = find_ti_table_ladder(conn, join_spec["table_left"], join_spec["table_right"], tau)
     prof["stream_build.ti_lookup"] = time.perf_counter() - t0
     prof["stream_build.ti_ladder"] = [t for _, t in ti_ladder]
+
+    # No rung of the ladder holds a pair beyond its own build threshold, so a wider
+    # query radius leaves the join stream dry at ti_tau with (ti_tau, tau] unseen.
+    ti_tau = ti_ladder[-1][1] if ti_ladder else None
+    overflow = ti_tau is not None and tau > ti_tau
+    prof["ti_table_tau"] = ti_tau
+    prof["ti_overflow"] = overflow
 
     streams = {"left": None, "right": None, "join": None}
     stream_weights = {"left": None, "right": None, "join": None}
@@ -1554,6 +1817,8 @@ def _build_w7_streams(
                 init_stream_fetchK=init_stream_fetchKs.get(role),
                 precomputed_selectivity=sel_role,
                 light_mode=light_mode,
+                keep_vec_cols=(keep_vec_cols or {}).get(role),
+                binary=binary,
                 id_col=_table_pk(sig["table"]),
                 text_col=_table_text(sig["table"]),
             )
@@ -1605,7 +1870,8 @@ def _build_w7_streams(
                 "table": sig["table"].lower(),
             }
 
-    return {"streams": streams, "weights": stream_weights, "signal_info": signal_info}
+    return {"streams": streams, "weights": stream_weights, "signal_info": signal_info,
+            "ti_overflow": overflow}
 
 
 def _run_w7_threshold(
@@ -1651,6 +1917,9 @@ def _run_w7_threshold(
 
     # Signal info for direct score computation on join-stream entities
     sig_info = stream_info.get("signal_info", {})
+    ti_overflow = stream_info.get("ti_overflow", False)
+    last_join_dis = None
+    fallback = False
 
     # Entity + score caches (populated from both entity streams and join-stream lookups)
     entity_cache_left: Dict[int, Dict] = {}
@@ -1667,6 +1936,10 @@ def _run_w7_threshold(
     prof["distance_compute"] = 0.0
 
     iteration = 0
+    left_pk = _table_pk(t_left)
+    right_pk = _table_pk(t_right)
+    join_left_key = f"{t_left.lower()}.{left_pk}"
+    join_right_key = f"{t_right.lower()}.{right_pk}"
     left_exhausted = False
     right_exhausted = False
     join_exhausted = False
@@ -1677,9 +1950,6 @@ def _run_w7_threshold(
             break
 
         iteration += 1
-
-        left_pk = _table_pk(t_left)
-        right_pk = _table_pk(t_right)
 
         # --- Pull one item from left stream ---
         new_left_entry = None
@@ -1722,8 +1992,9 @@ def _run_w7_threshold(
                     join_exhausted = True
                     break
                 ti_entry, score_dis = item
-                left_id = ti_entry.get(f"{t_left.lower()}.{_table_pk(t_left)}")
-                right_id = ti_entry.get(f"{t_right.lower()}.{_table_pk(t_right)}")
+                last_join_dis = score_dis
+                left_id = ti_entry.get(join_left_key)
+                right_id = ti_entry.get(join_right_key)
                 if left_id is None or right_id is None:
                     continue
                 pair_key = (left_id, right_id)
@@ -1769,6 +2040,14 @@ def _run_w7_threshold(
                     heapq.heapreplace(heap, (-total_score, tie_breaker, (left_id, right_id, total_score)))
                     tie_breaker += 1
 
+        # In fallback the cross-product is the only way left to find a pair, so every
+        # entry it pairs needs its join embedding (light_mode streams omit it).
+        if fallback:
+            if new_left_entry is not None:
+                _w7_attach_join_embeddings(conn, t_left, join_spec["embed_left"], [new_left_entry[0]])
+            if new_right_entry is not None:
+                _w7_attach_join_embeddings(conn, t_right, join_spec["embed_right"], [new_right_entry[0]])
+
         # --- Process entity cross-product: new_left × all_right + old_left × new_right ---
         # Cross-product only discovers pairs where BOTH entities are in their
         # semantic streams.  Valid unseen pairs fall into three cases:
@@ -1789,7 +2068,7 @@ def _run_w7_threshold(
                 _w7_try_entity_pair(
                     left_entry, left_score, right_entry, right_score,
                     join_spec, tau, weights, n_signals, score_f,
-                    seen_pairs, heap, k, tie_breaker, prof,
+                    seen_pairs, heap, k, tie_breaker, prof, left_pk, right_pk,
                 )
                 tie_breaker += 1
 
@@ -1800,14 +2079,50 @@ def _run_w7_threshold(
                 _w7_try_entity_pair(
                     left_entry, left_score, right_entry, right_score,
                     join_spec, tau, weights, n_signals, score_f,
-                    seen_pairs, heap, k, tie_breaker, prof,
+                    seen_pairs, heap, k, tie_breaker, prof, left_pk, right_pk,
                 )
                 tie_breaker += 1
 
         # --- Join stream exhausted: all valid candidates have been scored ---
+        # Unless the query radius overflows the TI ladder: pairs in (ti_tau, tau]
+        # never come through the join stream, so keep pulling the entity streams
+        # and let the cross-product find them until the bound below closes.
         if join_exhausted:
-            prof["early_stop"] = "join_exhausted"
-            break
+            if not ti_overflow:
+                prof["early_stop"] = "join_exhausted"
+                break
+            if not fallback:
+                fallback = True
+                prof["fallback_iter"] = iteration
+                # Entries read so far may lack join embeddings, in which case the
+                # cross-product marked their pairs seen without checking them. Give
+                # every such pair one exact check; a pair already scored and evicted
+                # cannot re-enter, since its score is no better than the current K-th.
+                t0 = time.perf_counter()
+                n_filled = _w7_attach_join_embeddings(
+                    conn, t_left, join_spec["embed_left"], [e for e, _ in all_left])
+                n_filled += _w7_attach_join_embeddings(
+                    conn, t_right, join_spec["embed_right"], [e for e, _ in all_right])
+                if n_filled:
+                    in_heap = {
+                        (lv if isinstance(lv, int) else lv.get(left_pk),
+                         rv if isinstance(rv, int) else rv.get(right_pk))
+                        for _, _, (lv, rv, _sc) in heap
+                    }
+                    for left_entry, left_score in all_left:
+                        for right_entry, right_score in all_right:
+                            pair_key = (left_entry.get(left_pk), right_entry.get(right_pk))
+                            if pair_key in in_heap:
+                                continue
+                            seen_pairs.discard(pair_key)
+                            _w7_try_entity_pair(
+                                left_entry, left_score, right_entry, right_score,
+                                join_spec, tau, weights, n_signals, score_f,
+                                seen_pairs, heap, k, tie_breaker, prof, left_pk, right_pk,
+                            )
+                            tie_breaker += 1
+                prof["fallback_catch_up"] = time.perf_counter() - t0
+                prof["fallback_emb_filled"] = n_filled
 
         # --- Check termination bound ---
         peek_left = streams["left"].peek_score()
@@ -1816,7 +2131,8 @@ def _run_w7_threshold(
 
         pl = peek_left if peek_left is not None else (all_left[-1][1] if all_left else 0.0)
         pr = peek_right if peek_right is not None else (all_right[-1][1] if all_right else 0.0)
-        pj = peek_join if peek_join is not None else 0.0
+        # A drained join stream keeps its cursor on the last pair it returned.
+        pj = peek_join if peek_join is not None else (last_join_dis or 0.0)
         tl = all_left[0][1] if all_left else pl
         tr = all_right[0][1] if all_right else pr
 
@@ -1902,11 +2218,9 @@ def _run_w7_threshold(
 def _w7_try_entity_pair(
     left_entry, left_score, right_entry, right_score,
     join_spec, tau, weights, n_signals, score_f,
-    seen_pairs, heap, k, tie_breaker, prof,
+    seen_pairs, heap, k, tie_breaker, prof, left_pk, right_pk,
 ):
     """Try a (left, right) entity pair from the cross-product streams."""
-    left_pk = _table_pk(join_spec["table_left"])
-    right_pk = _table_pk(join_spec["table_right"])
     left_id = left_entry.get(left_pk)
     right_id = right_entry.get(right_pk)
     if left_id is None or right_id is None:
@@ -1940,6 +2254,30 @@ def _w7_try_entity_pair(
         heapq.heappush(heap, (-total_score, tie_breaker, (left_entry, right_entry, total_score)))
     elif total_score < -heap[0][0]:
         heapq.heapreplace(heap, (-total_score, tie_breaker, (left_entry, right_entry, total_score)))
+
+
+def _w7_attach_join_embeddings(
+    conn: psycopg.Connection, table: str, col: str, entries: List[Dict[str, Any]],
+) -> int:
+    """Fill in the join embedding on stream entries read without it (light_mode).
+
+    Entries already carrying it are left alone, so this is a no-op for W7.
+    Returns the number of entries filled.
+    """
+    pk = _table_pk(table)
+    missing = [e for e in entries if e.get(col) is None and e.get(pk) is not None]
+    if not missing:
+        return 0
+    with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+        cur.execute(
+            f'SELECT {_quote(pk)}, {_quote(col)} FROM {_quote(_resolve_hnsw_table(table))} '
+            f'WHERE {_quote(pk)} = ANY(%s)',
+            ([e[pk] for e in missing],),
+        )
+        emb = dict(cur.fetchall())
+    for e in missing:
+        e[col] = emb.get(e[pk])
+    return len(missing)
 
 
 def _batch_score_sql(
@@ -2095,7 +2433,9 @@ def _compute_distance(emb1: Any, emb2: Any, metric: str) -> float:
     v2 = np.array(emb2) if not isinstance(emb2, np.ndarray) else emb2
 
     if metric == "l2":
-        return float(np.linalg.norm(v1 - v2))
+        # what np.linalg.norm does for a 1-D float vector, minus its dispatch overhead
+        d = v1 - v2
+        return float(np.sqrt(d.dot(d)))
     elif metric == "cos":
         return 1.0 - np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-10)
     elif metric == "ip":
@@ -2213,6 +2553,62 @@ def _run_w8_strategy_c(
     return scored[:k]
 
 
+def _w8_c_covers_band(
+    query: Dict[str, Any],
+    top_triples: List[Tuple[int, int, float]],
+    ti_tau: float,
+    score_f: Any,
+    k: int,
+    prof: Dict[str, Any],
+) -> bool:
+    """Case C under overflow: can its enumeration stand without the (ti_tau, tau] band?
+
+    A band pair's join distance exceeds ti_tau, and neither endpoint can score
+    better than the best predicate-passing row on its own side, so
+    score_f(best_left, best_right, ti_tau) lower-bounds every band pair. If the
+    K-th enumerated pair is no worse than that, no band pair can enter the top-K.
+    """
+    if len(top_triples) < k:
+        prof["c_band_check"] = "short"
+        return False
+
+    # Fresh connection, as in Case A, so the HNSW probes' GUCs stay off `conn`.
+    t0 = time.perf_counter()
+    probe_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True)
+    register_vector(probe_conn)
+    probe_conn.execute("SET enable_seqscan = off")
+    try:
+        info = _build_w7_streams(
+            probe_conn, query["scoring"]["signals"], query.get("predicates", []),
+            query["join"], {},
+            init_stream_fetchKs={"left": 1, "right": 1, "join": 1},
+            precomputed_selectivity=query.get("precomputed_selectivity"),
+            light_mode=True,
+        )
+        bound_scores = [0.0] * len(query["scoring"]["signals"])
+        for role in ("left", "right"):
+            if info["streams"][role] is None:
+                continue
+            best = info["streams"][role].peek_score()
+            if best is None:
+                # No predicate-passing row on this side, so the band is empty too.
+                prof["c_band_check"] = "empty_side"
+                return True
+            bound_scores[info["weights"][role]] = best
+    finally:
+        probe_conn.close()
+    if info["weights"]["join"] is not None:
+        bound_scores[info["weights"]["join"]] = ti_tau
+
+    band_bound = score_f(bound_scores)
+    kth = top_triples[-1][2]
+    prof["c_band_probe"] = time.perf_counter() - t0
+    prof["c_band_bound"] = band_bound
+    prof["c_kth"] = kth
+    prof["c_band_check"] = "covered" if kth <= band_bound else "band_may_win"
+    return kth <= band_bound
+
+
 def run_w8(conn: psycopg.Connection, query: Dict[str, Any], eps: float = 0.1,
            time_budget: float = 30.0, ti_chunk_step: float = 0.05,
            evt_threshold: float = 10000.0, **kwargs) -> List[Tuple]:
@@ -2249,7 +2645,9 @@ def run_w8(conn: psycopg.Connection, query: Dict[str, Any], eps: float = 0.1,
     prof["expected_valid_tuples"] = evt
     prof["evt_threshold"] = evt_threshold
 
-    if evt is not None and evt < evt_threshold:
+    case_c = evt is not None and evt < evt_threshold
+    c_triples: List[Tuple[int, int, float]] = []
+    if case_c:
         prof["strategy"] = "C"
         tau = float(join_spec["distance_threshold"])
         from ours.utils import find_ti_table
@@ -2261,6 +2659,19 @@ def run_w8(conn: psycopg.Connection, query: Dict[str, Any], eps: float = 0.1,
             k=k, prof=prof,
         )
 
+        # The TI table holds no pair beyond ti_tau, so under overflow the band
+        # (ti_tau, tau] is missing from the enumeration. Keep it alone only if no
+        # band pair could beat its K-th; otherwise also run Case A and merge.
+        ti_tau = ti_table_tau(ti_table)
+        overflow = ti_tau is not None and tau > ti_tau
+        prof["ti_table_tau"] = ti_tau
+        prof["ti_overflow"] = overflow
+        if overflow and not _w8_c_covers_band(query, top_triples, ti_tau, score_f, k, prof):
+            prof["c_overflow_to_a"] = True
+            c_triples = top_triples
+            case_c = False
+
+    if case_c:
         # Case C returns (lid, rid, score); fetch text cols for display on top-K only.
         t_left = join_spec["table_left"]
         t_right = join_spec["table_right"]
@@ -2322,6 +2733,22 @@ def run_w8(conn: psycopg.Connection, query: Dict[str, Any], eps: float = 0.1,
 
     entity_conn.close()
     join_conn.close()
+
+    # Case C handed this query over on overflow. Its enumeration is exact below
+    # ti_tau while Case A is approximate, so keep every enumerated pair in play.
+    if c_triples:
+        l_pk = _table_pk(join_spec["table_left"])
+        r_pk = _table_pk(join_spec["table_right"])
+        have = {(tl[l_pk], tr[r_pk]) for tl, tr, _ in results}
+        extra = [t for t in c_triples if (t[0], t[1]) not in have]
+        if extra:
+            l_ent = _fetch_entities_batch(conn, join_spec["table_left"], [t[0] for t in extra])
+            r_ent = _fetch_entities_batch(conn, join_spec["table_right"], [t[1] for t in extra])
+            results = sorted(
+                results + [(l_ent[l], r_ent[r], sc) for l, r, sc in extra if l in l_ent and r in r_ent],
+                key=lambda x: x[2],
+            )[:k]
+        prof["c_merged"] = len(extra)
 
     prof["total"] = time.perf_counter() - t_total
 

@@ -94,6 +94,14 @@ def find_ti_table(
     return numeric[-1][1]
 
 
+def ti_table_tau(name: str) -> Optional[float]:
+    """Parse the build threshold encoded in a TI table name (``ti_<left>_<right>_<tau>``)."""
+    try:
+        return float(name.rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
 def find_ti_table_ladder(
     conn: psycopg.Connection, t_left: str, t_right: str, query_tau: float
 ) -> List[Tuple[str, float]]:

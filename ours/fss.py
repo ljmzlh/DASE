@@ -137,6 +137,7 @@ class FilteredScoreStreamer:
         id_col: str = "id",
         text_col: str = "title",
         hnsw_ef: Optional[int] = None,
+        binary: bool = False,
     ):
         """
         Args:
@@ -167,6 +168,9 @@ class FilteredScoreStreamer:
             query_k: The query top-K, used for IVFFlat probe calculation.
 
             fss_pf: Probe factor multiplier: n_probes = probe_rule(K) * fss_pf.
+
+            binary: Fetch rows in binary format, so vectors arrive as float4 arrays
+                instead of text that pgvector re-parses (same values, much cheaper).
         """
         self.conn = conn
         self.table = table
@@ -177,6 +181,7 @@ class FilteredScoreStreamer:
         self._batch_size = batch_size or DEFAULT_BATCH
         self._light_mode = light_mode  # True → exclude vector cols from SELECT
         self._keep_vec_cols = set(keep_vec_cols or [])
+        self._binary = binary
         self._query_k = query_k
         self._fss_pf = fss_pf
         self._id_col = id_col
@@ -513,7 +518,7 @@ class FilteredScoreStreamer:
             f"LIMIT %(lim)s OFFSET %(off)s"
         )
         t0 = _time.perf_counter()
-        with self.conn.cursor(row_factory=dict_row) as cur:
+        with self.conn.cursor(row_factory=dict_row, binary=self._binary) as cur:
             cur.execute("SET LOCAL enable_indexscan = off")
             cur.execute(sql_score, score_params)
             rows = cur.fetchall()
@@ -556,7 +561,7 @@ class FilteredScoreStreamer:
             f"LIMIT %(lim)s OFFSET %(off)s"
         )
         t0 = _time.perf_counter()
-        with self.conn.cursor(row_factory=dict_row) as cur:
+        with self.conn.cursor(row_factory=dict_row, binary=self._binary) as cur:
             # Search effort is independent from the number of rows returned.
             requested_ef = self._hnsw_ef if self._hnsw_ef is not None else self._batch_size
             ef = min(max(requested_ef, self._query_k), HNSW_EF_SEARCH_MAX)
@@ -602,7 +607,7 @@ class FilteredScoreStreamer:
             f"LIMIT %(lim)s"
         )
         t0 = _time.perf_counter()
-        with self.conn.cursor(row_factory=dict_row) as cur:
+        with self.conn.cursor(row_factory=dict_row, binary=self._binary) as cur:
             if self._sig_type == "semantic":
                 if self.table.endswith("_hnsw"):
                     # HNSW: ef_search = fetch_K (clamped to cap). Note: enable_seqscan=off
