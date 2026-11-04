@@ -12,6 +12,11 @@ pgvector/src/*.o
 pgvector/src/*.bc
 pgvector/sql/vector--0.8.5.sql
 
+# dase_batch_hnsw build artifacts
+batch_hnsw/*.o
+batch_hnsw/*.bc
+batch_hnsw/*.so
+
 # psql parquets — produced by dump_psql_to_parquet.py or downloaded from HF
 /psql_dump/
 

@@ -1,0 +1,6 @@
+comment = 'DASE batched HNSW range probes for SemJI construction'
+default_version = '1.0'
+module_pathname = '$libdir/dase_batch_hnsw'
+requires = 'vector'
+relocatable = false
+schema = bh
