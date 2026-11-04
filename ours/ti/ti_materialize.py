@@ -199,6 +199,13 @@ def materialize_ti(conn, input_file, output_table, table_left, table_right,
         )
     print(f"  Added covering index {cov_idx}")
 
+    # Planner statistics and the visibility map (needed by the index-only scan
+    # above). Without them, queries run right after a build get slow plans until
+    # autovacuum reaches the table.
+    with conn.cursor() as cur:
+        cur.execute(f'VACUUM ANALYZE "{output_table}"')
+    print(f"  Vacuumed and analyzed {output_table}")
+
 
 def main():
     CONFIGS = load_configs()
