@@ -28,8 +28,9 @@ pip install -r requirements.txt
 ```
 
 You also need:
-- A local **PostgreSQL 15+** server. The runner role must have `CREATEDB`.
-- The **DASE pgvector fork** installed as the `vector` extension (see below).
+- A local **PostgreSQL 15+** server. The runner role must be a **superuser** (the role a fresh `initdb` creates is one). `setup_data.py` and the SemJI scripts run `CREATE EXTENSION` for two C extensions that are not marked trusted (`vector` and `dase_batch_hnsw`), and the Table 4 script sets `log_min_messages`; both need a superuser.
+- The **DASE pgvector fork** installed as the `vector` extension (§1.1).
+- The **`dase_batch_hnsw`** extension (§1.2), for the shared-traversal row of Table 4 and `setup_data.py --ti-method shared`.
 - For the SemBench cascade track, a GCP project with BigQuery enabled.
 
 ### 1.1 Install the DASE pgvector fork
@@ -55,6 +56,24 @@ WHERE oprname IN ('<->#', '<->@');
 ```
 
 If `<->#` is missing, the standard pgvector got installed instead — uninstall it (`DROP EXTENSION vector CASCADE` on each db), `make uninstall` upstream pgvector, and rebuild the fork.
+
+### 1.2 Install the `dase_batch_hnsw` extension
+
+`batch_hnsw/` implements the shared traversal used to build SemJI (the last row of paper Table 4): one C function runs every HNSW range probe over the left rows in k-means locality order, and each probe after the first in a group starts from the previous probe's nearest nodes instead of descending the upper layers. It compiles the fork's HNSW code from `pgvector/`, so build it from the same checkout and against the same server as §1.1:
+
+```bash
+cd batch_hnsw
+make
+sudo make install   # add PG_CONFIG=/path/to/pg_config if the pg_config on PATH belongs to another server
+```
+
+There is nothing to create by hand: the scripts that use it run `CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw` themselves. The extension requires `vector` in the same database and puts its functions in schema `bh`. To verify:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw;
+SELECT proname FROM pg_proc WHERE pronamespace = 'bh'::regnamespace;
+-- expect range_join_all and last_stats
+```
 
 ---
 
@@ -92,7 +111,7 @@ python setup_data.py --skip-download --skip-bq --psql-dbs '' \
 
 `setup_data.py` does, in order:
 1. Pull HF dataset → `psql_dump/` (parquets) + `sembench_data/<scenario>/`.
-2. `CREATE DATABASE imdb` and `CREATE DATABASE molecule`; `CREATE EXTENSION vector`; `CREATE TABLE` + `COPY` parquet rows; build btree/gin/HNSW indexes; build `<table>_id_map` lookup tables for the four `*_hnsw` base tables. Then build the SemJI / TI tables (`ti_imdb_t1_imdb_t2_{0.5,0.6}`, `ti_facts_50k_paper_{0.5,0.6,0.7}`) — these back W5–W8 cross-table joins. The molecule τ=0.7 TI is ~50 GB and slow; pass `--skip-ti` to skip if you only need W1–W4.
+2. `CREATE DATABASE imdb` and `CREATE DATABASE molecule`; `CREATE EXTENSION vector`; `CREATE TABLE` + `COPY` parquet rows; build btree/gin/HNSW indexes; build `<table>_id_map` lookup tables for the four `*_hnsw` base tables. Then build the SemJI / TI tables (`ti_imdb_t1_imdb_t2_{0.5,0.6}`, `ti_facts_50k_paper_{0.5,0.6,0.7}`) — these back W5–W8 cross-table joins. The molecule τ=0.7 TI is ~50 GB and slow; pass `--skip-ti` to skip if you only need W1–W4. By default the TI tables are built with `ours.ti.ti_build --method directhnsw_range`, the build behind the paper's W5–W8 results. `--ti-method shared` builds them with the shared traversal instead (`ours.ti.build_join_index_A_B`, needs §1.2): faster, but its approximate search returns a slightly different set of pairs.
 3. If requested, load NFCorpus's paper table and two real link relations.
 4. Run scenario `setup_bq.py` for `wildlife / mmqa / cars` (the other two cascade scenarios create BQ tables on first run).
 
@@ -154,6 +173,19 @@ Generated results and logs are intentionally not tracked.
 
 The Figure 8 entry point contains only the DASE directed-edge top-*n* dynamic
 program.
+
+The Table 4 script builds the SemJI pair table of `imdb_t1_hnsw × imdb_t2_hnsw`
+on `actor_director_emb` by default (τ = 0.5, ef_search = 40). `--methods` picks
+the rows: `exact`, `iterative`, `batched`, `vectorized`, and `shared`, the
+shared traversal of §1.2, whose time includes its k-means ordering step.
+Recall is reported against `exact` when it runs in the same invocation. On the
+full table `exact` takes over an hour; `--left-limit N` restricts the left side
+to its first N rows.
+
+```bash
+python -m experiments.semji_construction --methods vectorized shared
+python -m experiments.semji_construction --methods exact vectorized shared --left-limit 1000
+```
 
 ---
 

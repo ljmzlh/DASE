@@ -11,8 +11,10 @@ Three phases (each independently skippable):
                 parquets, build hnsw + btree + gin indexes. Then build the
                 SemJI / TI tables (ti_imdb_t1_imdb_t2_{0.5,0.6},
                 ti_facts_50k_paper_{0.5,0.6,0.7}) by invoking
-                `python -m ours.ti.ti_build` for each (config, threshold).
-                Skip with --skip-ti — but W5–W8 workloads need them.
+                `python -m ours.ti.ti_build` for each (config, threshold),
+                or `python -m ours.ti.build_join_index_A_B` with
+                --ti-method shared. Skip with --skip-ti — but W5–W8
+                workloads need them.
   3. BQ SETUP   for scenarios with setup_bq.py (wildlife, mmqa, cars):
                 runs the per-scenario setup using the provided GCP project.
                 ecomm and movie cascade scripts handle BQ tables inline on
@@ -48,9 +50,11 @@ Requirements
     Download:    HF source → pip: huggingface_hub
                  gs:// source → `gsutil` on PATH
                  plain https:// source → `curl` (only single files; no dirs)
-    PSQL setup:  pgvector extension installed on the postgres server.
+    PSQL setup:  DASE pgvector fork installed on the postgres server
+                 (plus dase_batch_hnsw for --ti-method shared).
                  pip: psycopg, pgvector, pyarrow, numpy.
-                 The runner role needs CREATEDB privilege.
+                 The runner role must be a superuser: CREATE EXTENSION of
+                 these C extensions needs one.
     BQ setup:    `gcloud auth application-default login`
                  SEMBENCH_SRC env var → upstream sembench/src/ checkout
                  pip: google-cloud-storage, google-cloud-bigquery
@@ -58,6 +62,7 @@ Requirements
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -682,22 +687,33 @@ def setup_bq(scenario: str, project: str, dry: bool) -> None:
 
 
 # ─── TI build ─────────────────────────────────────────────────────────────
-def build_ti_tables(db_kind: str, dry: bool) -> None:
+def build_ti_tables(db_kind: str, dry: bool, method: str = "directhnsw_range") -> None:
     """Build all SemJI / TI tables for `db_kind` by shelling out to
-    `python -m ours.ti.ti_build` once per (config, threshold) pair.
-    ti_build.py materializes inline, so no separate ti_materialize call."""
+    `python -m ours.ti.ti_build` once per (config, threshold) pair, or to
+    `python -m ours.ti.build_join_index_A_B` for method "shared". Both
+    materialize inline, so no separate ti_materialize call."""
     plan = TI_BUILD_PLAN.get(db_kind, [])
     if not plan:
         return
+    ti_configs = json.loads((ROOT / "ours" / "ti" / "ti_config.json").read_text())
     print(f"\n[ti:{db_kind}] building {len(plan)} TI table(s) — large; molecule τ=0.7 ≈ 50 GB")
     for config, threshold in plan:
-        cmd = [
-            sys.executable, "-m", "ours.ti.ti_build",
-            "--config", config,
-            "--method", "directhnsw_range",
-            "--metric", "l2",
-            "--threshold", str(threshold),
-        ]
+        if method == "shared":
+            wl = ti_configs[config]
+            cmd = [
+                sys.executable, "-m", "ours.ti.build_join_index_A_B",
+                "--config", config,
+                "--threshold", str(threshold),
+                "--output_table", f"ti_{wl['table_left']}_{wl['table_right']}_{threshold}",
+            ]
+        else:
+            cmd = [
+                sys.executable, "-m", "ours.ti.ti_build",
+                "--config", config,
+                "--method", "directhnsw_range",
+                "--metric", "l2",
+                "--threshold", str(threshold),
+            ]
         print(f"  → {config} τ={threshold}")
         if dry:
             print(f"    [dry] {' '.join(cmd)}")
@@ -767,6 +783,11 @@ def main() -> None:
     ap.add_argument("--skip-ti", action="store_true",
                     help="Skip building SemJI / TI tables after psql setup. "
                          "TI build is slow and large; W5–W8 workloads need them.")
+    ap.add_argument("--ti-method", choices=("directhnsw_range", "shared"), default="directhnsw_range",
+                    help="How to build the SemJI / TI tables. directhnsw_range (default) builds the "
+                         "tables behind the paper's W5–W8 results. shared uses the shared traversal "
+                         "of paper Table 4 (needs the dase_batch_hnsw extension): faster, but its "
+                         "approximate search returns a slightly different set of pairs.")
     ap.add_argument("--skip-bq", action="store_true",
                     help="Skip BQ setup phase.")
     ap.add_argument("--dry-run", action="store_true",
@@ -824,7 +845,7 @@ def main() -> None:
         for db_kind in psql_dbs:
             setup_psql_db(db_kind, urls[db_kind], args.psql_parquet_root, args.dry_run)
             if not args.skip_ti:
-                build_ti_tables(db_kind, args.dry_run)
+                build_ti_tables(db_kind, args.dry_run, args.ti_method)
         if args.nfcorpus_parquet_dir is not None:
             admin_url, database_name = _split_db_url(args.nfcorpus_url)
             _ensure_database(admin_url, database_name, args.dry_run)

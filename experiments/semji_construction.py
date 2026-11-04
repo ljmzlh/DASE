@@ -1,5 +1,7 @@
-"""Benchmark the four SemJI construction strategies in paper Table 4."""
+"""Benchmark the five SemJI construction strategies in paper Table 4."""
 from __future__ import annotations
+
+from batch_hnsw.order import locality_order  # first: caps OpenBLAS threads before numpy loads
 
 import argparse
 import json
@@ -9,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
 from psycopg import sql
@@ -228,6 +231,94 @@ def build_vectorized(
     conn.commit()
 
 
+def _l2_hnsw_index(conn: psycopg.Connection, table: str, vector_column: str) -> str:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.indexrelid::regclass::text
+            FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indexrelid
+            JOIN pg_am a ON a.oid = c.relam
+            JOIN pg_opclass oc ON oc.oid = i.indclass[0]
+            JOIN pg_attribute att ON att.attrelid = i.indrelid AND att.attnum = i.indkey[0]
+            WHERE i.indrelid = %s::regclass AND a.amname = 'hnsw'
+              AND oc.opcname = 'vector_l2_ops' AND att.attname = %s
+            """,
+            (table, vector_column),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise SystemExit(f"no hnsw vector_l2_ops index on {table}({vector_column})")
+    return row[0]
+
+
+def build_shared(
+    conn: psycopg.Connection,
+    result_table: str,
+    left_table: str,
+    right_table: str,
+    left_id: str,
+    right_id: str,
+    left_vector: str,
+    right_vector: str,
+    radius: float,
+    ef_search: int,
+    left_limit: int | None,
+    group_size: int,
+    seeds: int,
+) -> dict[str, Any]:
+    """Shared traversal (dase_batch_hnsw extension): all probes run in one
+    bh.range_join_all call over the left rows in k-means locality order, and each
+    probe after the first in a group starts from the previous probe's `seeds`
+    nearest nodes instead of descending the upper layers. The time includes the
+    ordering step (reading the left vectors, k-means, writing the order table)."""
+    right_index = _l2_hnsw_index(conn, right_table, right_vector)
+    self_join = left_table == right_table and left_id == right_id
+
+    started = time.perf_counter()
+    # Binary rows (vectors arrive as float4 arrays); ClientCursor cannot fetch binary
+    with psycopg.Cursor(conn) as cur:
+        cur.execute(left_source_sql(left_table, left_id, left_vector, left_limit), binary=True)
+        rows = cur.fetchall()
+    order, groups = locality_order(np.stack([row[1] for row in rows]).astype(np.float32), group_size)
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS semji_shared_order")
+        cur.execute("CREATE TEMP TABLE semji_shared_order (id bigint PRIMARY KEY, ord int, grp int)")
+        with cur.copy("COPY semji_shared_order (id, ord, grp) FROM STDIN") as copy:
+            for position, (row_index, group) in enumerate(zip(order, groups)):
+                copy.write_row((rows[row_index][0], position, int(group)))
+        cur.execute("ANALYZE semji_shared_order")
+    order_seconds = time.perf_counter() - started
+
+    left_sql = sql.SQL(
+        "SELECT l.{id}::int8, l.{vector}, o.grp FROM {table} l "
+        "JOIN semji_shared_order o ON o.id = l.{id} ORDER BY o.ord"
+    ).format(
+        id=sql.Identifier(left_id), vector=sql.Identifier(left_vector), table=sql.Identifier(left_table)
+    ).as_string(conn)
+    self_filter = sql.SQL("WHERE candidate.{right_id} > r.left_id").format(
+        right_id=sql.Identifier(right_id)
+    ) if self_join else sql.SQL("")
+    query = sql.SQL(
+        """
+        INSERT INTO {result}
+        SELECT r.left_id, candidate.{right_id}, r.dist
+        FROM bh.range_join_all(%s, %s::regclass, %s, %s, 'warm', %s) AS r
+        JOIN {right_table} AS candidate ON candidate.ctid = r.right_tid
+        {self_filter}
+        """
+    ).format(
+        result=sql.Identifier(result_table), right_id=sql.Identifier(right_id),
+        right_table=sql.Identifier(right_table), self_filter=self_filter,
+    )
+    with conn.cursor() as cur:
+        cur.execute(query, (left_sql, right_index, radius, ef_search, seeds))
+        cur.execute("SELECT bh.last_stats()")
+        stats = json.loads(cur.fetchone()[0])
+    conn.commit()
+    return {"order_seconds": order_seconds, "descents": stats["n_descents"], "probes": stats["n_queries"]}
+
+
 def table_count(conn: psycopg.Connection, table: str) -> int:
     with conn.cursor() as cur:
         cur.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table)))
@@ -261,9 +352,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ef-search", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--left-limit", type=int, default=None)
+    parser.add_argument("--group-size", type=int, default=256, help="shared: rows per k-means group")
+    parser.add_argument("--seeds", type=int, default=4, help="shared: nodes carried to the next probe")
     parser.add_argument(
-        "--methods", nargs="+", choices=("exact", "iterative", "batched", "vectorized"),
-        default=["exact", "iterative", "batched", "vectorized"],
+        "--methods", nargs="+", choices=("exact", "iterative", "batched", "vectorized", "shared"),
+        default=["exact", "iterative", "batched", "vectorized", "shared"],
     )
     parser.add_argument("--output", type=Path, default=Path("results/semji_construction.json"))
     args = parser.parse_args(argv)
@@ -278,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         "iterative": build_iterative,
         "batched": build_batched,
         "vectorized": build_vectorized,
+        "shared": build_shared,
     }
     common = {
         "left_table": args.left_table, "right_table": args.right_table,
@@ -286,8 +380,22 @@ def main(argv: list[str] | None = None) -> int:
         "radius": args.radius, "left_limit": args.left_limit,
     }
     results: dict[str, Any] = {}
-    with psycopg.connect(args.database_url) as conn:
+    # Client-side binding: `SET hnsw.radius = %s` cannot take a server-side parameter.
+    with psycopg.connect(args.database_url, cursor_factory=psycopg.ClientCursor) as conn:
         register_vector(conn)
+        with conn.cursor() as cur:
+            # The pgvector fork writes LOG lines for every HNSW scan it runs; the
+            # paper's timings are taken without them.
+            cur.execute("SET log_min_messages = fatal")
+            if "shared" in args.methods:
+                try:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS dase_batch_hnsw")
+                except psycopg.Error as error:
+                    raise SystemExit(
+                        f"CREATE EXTENSION dase_batch_hnsw failed: {error}\n"
+                        "Install it from batch_hnsw/ (README §1.2), or leave out --methods shared."
+                    )
+        conn.commit()
         for method in args.methods:
             result_table = f"semji_benchmark_{method}"
             create_result_table(conn, result_table)
@@ -296,10 +404,14 @@ def main(argv: list[str] | None = None) -> int:
                 keyword_args["ef_search"] = args.ef_search
             if method == "batched":
                 keyword_args["batch_size"] = args.batch_size
+            if method == "shared":
+                keyword_args["group_size"] = args.group_size
+                keyword_args["seeds"] = args.seeds
             started = time.perf_counter()
-            builders[method](conn, result_table=result_table, **keyword_args)
+            details = builders[method](conn, result_table=result_table, **keyword_args)
             seconds = time.perf_counter() - started
             results[method] = {"seconds": seconds, "pairs": table_count(conn, result_table)}
+            results[method].update(details or {})
         if "exact" in results:
             for method in results:
                 results[method]["recall"] = recall_against(
