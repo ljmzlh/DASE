@@ -19,7 +19,14 @@ ablations.
 
 ## 1. Set up the environment
 
-Download this repository from <https://anonymous.4open.science/r/DASE-2C61/> and unpack it. Then set up the environment in one of two ways:
+Download this repository from <https://anonymous.4open.science/r/DASE-2C61/> (the download button saves `DASE-2C61.zip`). The archive has no top-level folder, so unpack it into a new directory:
+
+```bash
+mkdir DASE && cd DASE
+unzip /path/to/DASE-2C61.zip
+```
+
+Then set up the environment in one of two ways:
 - **Docker (§1.1).** One image holds PostgreSQL with both DASE extensions, the Python dependencies and the code. You only need Docker.
 - **Manual install (§1.2).** You install the Python dependencies, a PostgreSQL server and the two extensions yourself.
 
